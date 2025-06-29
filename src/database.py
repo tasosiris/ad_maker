@@ -24,6 +24,10 @@ class Job(Base):
     idea = Column(String, unique=True, index=True)
     category = Column(String)
     status = Column(String, default="pending") # e.g., pending, scripting, feedback, approved, rendering, done
+    # Product information
+    product_name = Column(String, nullable=True)
+    product_url = Column(String, nullable=True)
+    affiliate_commission = Column(String, nullable=True)  # e.g., "5-8%"
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     scripts = relationship("Script", back_populates="job")
@@ -33,7 +37,7 @@ class Script(Base):
     id = Column(Integer, primary_key=True, index=True)
     job_id = Column(Integer, ForeignKey("jobs.id"))
     script_type = Column(String) # 'long_form' or 'short_form'
-    content = Text
+    content = Column(Text)
     status = Column(String, default="pending") # e.g., pending, approved, revised
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -45,7 +49,7 @@ class Feedback(Base):
     id = Column(Integer, primary_key=True, index=True)
     script_id = Column(Integer, ForeignKey("scripts.id"))
     decision = Column(String) # 'approved' or 'revised'
-    notes = Text
+    notes = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     script = relationship("Script", back_populates="feedback")
@@ -55,6 +59,8 @@ class Feedback(Base):
 def init_db():
     """Create all tables in the database."""
     print("Initializing database...")
+    # Drop all tables first to ensure a clean slate
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     print("Database initialized.")
 

@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from inputimeout import inputimeout, TimeoutOccurred
 from src.database import get_db, Script, Feedback, Job
 
 def display_script_summary(script: Script):
@@ -7,46 +8,56 @@ def display_script_summary(script: Script):
     print(f"Script ID: {script.id}")
     print(f"Idea: {script.job.idea}")
     print(f"Type: {script.script_type}")
-    print(f"Excerpt: {script.content[:250]}...")
+    content = str(script.content or '')
+    print(f"Excerpt: {content[:250]}...")
     print("-------------------------")
 
 def collect_feedback(db: Session, script: Script) -> str:
     """
     Collects user feedback, saves it to the DB, and updates script/job status.
+    Includes a 3-second timeout that defaults to 'approve'.
     """
-    while True:
-        action = input("Action (approve, revise, quit): ").lower().strip()
-        
-        if action == 'approve':
-            script.status = 'approved'
-            new_feedback = Feedback(script_id=script.id, decision='approved')
-            db.add(new_feedback)
-            
-            # Check if all other scripts for this job are also done
-            all_scripts = db.query(Script).filter(Script.job_id == script.job_id).all()
-            if all(s.status in ['approved', 'revised_and_done'] for s in all_scripts):
-                script.job.status = 'approved'
-                print(f"Job {script.job.id} approved. Ready for video composition.")
+    action = ""
+    try:
+        prompt = "Action (approve, revise, quit) [approve]: "
+        action = inputimeout(prompt=prompt, timeout=3).lower().strip()
+    except TimeoutOccurred:
+        action = 'approve'
+        print(f"\nTimeout occurred. Defaulting to 'approve' for script {script.id}.")
 
-            db.commit()
-            print(f"Script {script.id} approved.")
-            return 'approved'
-            
-        elif action == 'revise':
-            notes = input("Please provide revision notes: ")
-            script.status = 'revision_needed'
-            new_feedback = Feedback(script_id=script.id, decision='revised', notes=notes)
-            db.add(new_feedback)
-            db.commit()
-            print("Feedback submitted. The script will be revised.")
-            # In a real pipeline, another agent would pick this up.
-            return 'revised'
-            
-        elif action == 'quit':
-            return 'quit'
-            
-        else:
-            print("Invalid action. Please choose 'approve', 'revise', or 'quit'.")
+    if action == 'approve':
+        script.status = 'approved'
+        new_feedback = Feedback(script_id=script.id, decision='approved')
+        db.add(new_feedback)
+        
+        # Check if all other scripts for this job are also done
+        all_scripts = db.query(Script).filter(Script.job_id == script.job_id).all()
+        if all(s.status in ['approved', 'revised_and_done'] for s in all_scripts):
+            script.job.status = 'approved'
+            print(f"Job {script.job.id} approved. Ready for video composition.")
+
+        db.commit()
+        print(f"Script {script.id} approved.")
+        return 'approved'
+        
+    elif action == 'revise':
+        notes = input("Please provide revision notes: ")
+        script.status = 'revision_needed'
+        new_feedback = Feedback(script_id=script.id, decision='revised', notes=notes)
+        db.add(new_feedback)
+        db.commit()
+        print("Feedback submitted. The script will be revised.")
+        # In a real pipeline, another agent would pick this up.
+        return 'revised'
+        
+    elif action == 'quit':
+        return 'quit'
+        
+    else:
+        print("Invalid action. Please choose 'approve', 'revise', or 'quit'.")
+        # Recursively call or loop to ensure valid input is eventually received.
+        # For simplicity here, we'll just let it end. A robust CLI would loop.
+        return 'invalid'
 
 def get_feedback_for_script(db: Session, script_id: int):
     """Retrieves all feedback for a given script."""

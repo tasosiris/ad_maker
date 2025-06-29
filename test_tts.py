@@ -37,11 +37,13 @@ def test_tts():
     
     # Generate voice for the test content
     print("\nGenerating voice audio...")
-    audio_paths = generate_voice(script_id, test_content)
+    audio_clips = generate_voice(script_id, test_content)
     
-    print(f"\nGenerated {len(audio_paths)} audio files:")
-    for path in audio_paths:
-        print(f"- {path}")
+    print(f"\nGenerated {len(audio_clips)} audio files:")
+    for clip in audio_clips:
+        print(f"- {clip.audio_path}")
+        assert os.path.exists(clip.audio_path)
+        assert isinstance(clip.text, str)
 
 if __name__ == "__main__":
     test_tts() 

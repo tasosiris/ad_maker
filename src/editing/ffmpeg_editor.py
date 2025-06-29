@@ -87,36 +87,89 @@ def compose_video(video_assets: List[str], audio_clips: List[str], output_path: 
             video_assets = video_assets * repeat_factor
             print(f"DEBUG: Extended video assets to {len(video_assets)} clips")
         
-        # STEP 1: First concatenate all videos to a temporary file
-        os.makedirs(TEMP_DIR, exist_ok=True)
+        # STEP 1: First normalize all videos to the same resolution and framerate
+        normalized_videos = []
+        target_width, target_height = get_video_resolution(VIDEO_RESOLUTION)
+        
+        for i, video in enumerate(video_assets):
+            if not os.path.exists(video):
+                continue
+                
+            # Create a normalized version of each video
+            normalized_path = os.path.join(TEMP_DIR, f"normalized_{i}_{int(time.time())}.mp4")
+            
+            try:
+                # Get video dimensions
+                probe = ffmpeg.probe(video)
+                video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
+                
+                if video_stream:
+                    width = int(video_stream['width'])
+                    height = int(video_stream['height'])
+                    
+                    # Calculate scaling parameters to fill the target frame while maintaining aspect ratio
+                    if width / height > target_width / target_height:
+                        # Video is wider than target aspect ratio, scale by height
+                        scale_params = {'w': -2, 'h': target_height}
+                    else:
+                        # Video is taller or same aspect ratio, scale by width
+                        scale_params = {'w': target_width, 'h': -2}
+
+                    try:
+                        (
+                            ffmpeg.input(video)
+                            .filter('scale', **scale_params)
+                            .filter('crop', w=target_width, h=target_height, x='(in_w-out_w)/2', y='(in_h-out_h)/2')
+                            .output(
+                                normalized_path, 
+                                r=str(VIDEO_FPS), 
+                                preset='fast', 
+                                **{'c:v': 'libx264', 'pix_fmt': 'yuv420p'}
+                            )
+                            .overwrite_output()
+                            .run(capture_stdout=True, capture_stderr=True)
+                        )
+                        if os.path.exists(normalized_path):
+                            normalized_videos.append(normalized_path)
+                            print(f"Successfully normalized video {i}: {video}")
+                        else:
+                            print(f"WARNING: Failed to normalize video {i}, output file not found.")
+
+                    except ffmpeg.Error as e:
+                        print(f"WARNING: Error normalizing video {i} ({video}) with ffmpeg-python: {e.stderr.decode()}")
+
+                else:
+                    print(f"WARNING: No video stream found in {video}")
+            except Exception as e:
+                print(f"WARNING: Error processing video {i} ({video}): {e}")
+        
+        if not normalized_videos:
+            print("ERROR: Failed to normalize any videos")
+            return None
+        
+        # STEP 2: Concatenate all normalized videos
         temp_video_path = os.path.join(TEMP_DIR, f"temp_concatenated_{int(time.time())}.mp4")
         
-        # Create a concatenation file for ffmpeg
-        concat_file_path = os.path.join(TEMP_DIR, f"concat_{int(time.time())}.txt")
-        with open(concat_file_path, 'w') as f:
-            for video in video_assets:
-                # Use absolute paths to avoid issues
-                abs_path = os.path.abspath(video) if not os.path.isabs(video) else video
-                # Escape special characters
-                escaped_path = abs_path.replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
-                f.write(f"file '{escaped_path}'\n")
-        
-        print(f"DEBUG: Created concat file with {len(video_assets)} entries at {concat_file_path}")
-        
-        # Step 1A: Use ffmpeg command to concatenate videos
-        concat_cmd = [
-            'ffmpeg',
-            '-f', 'concat',
-            '-safe', '0',
-            '-i', concat_file_path,
-            '-c:v', 'copy',  # Copy video codec to speed up processing
-            '-an',  # No audio in this step
-            '-y',   # Overwrite output
-            temp_video_path
-        ]
-        print(f"Running concat command: {' '.join(concat_cmd)}")
-        os.system(' '.join(concat_cmd))
-        
+        try:
+            # Create a list of input streams
+            input_streams = [ffmpeg.input(v) for v in normalized_videos]
+            
+            # Concatenate them
+            (
+                ffmpeg.concat(*input_streams, v=1, a=0)
+                .output(temp_video_path, **{'c:v': 'libx264'})
+                .overwrite_output()
+                .run(capture_stdout=True, capture_stderr=True)
+            )
+            print(f"Successfully concatenated {len(normalized_videos)} videos.")
+        except ffmpeg.Error as e:
+            print(f"ERROR: Failed to concatenate videos: {e.stderr.decode()}")
+            # Clean up normalized videos before returning
+            for video in normalized_videos:
+                if os.path.exists(video):
+                    os.remove(video)
+            return None
+            
         if not os.path.exists(temp_video_path):
             print(f"ERROR: Failed to create concatenated video at {temp_video_path}")
             return None
@@ -126,7 +179,7 @@ def compose_video(video_assets: List[str], audio_clips: List[str], output_path: 
         concat_duration = float(concat_video_info['format']['duration'])
         print(f"DEBUG: Concatenated video duration: {concat_duration:.2f}s")
         
-        # STEP 2: Prepare audio - instead of using concat which can be problematic,
+        # STEP 3: Prepare audio - instead of using concat which can be problematic,
         # simply use the first audio clip if there's only one, or combine them with filter_complex
         if len(audio_clips) == 1:
             # Just use the single audio file directly
@@ -136,26 +189,28 @@ def compose_video(video_assets: List[str], audio_clips: List[str], output_path: 
             # Use filter_complex to concatenate audio files
             temp_audio_path = os.path.join(TEMP_DIR, f"temp_audio_{int(time.time())}.mp3")
             
-            # Build filter_complex command for audio concat
-            filter_inputs = []
-            for i in range(len(audio_clips)):
-                filter_inputs.append(f"-i {audio_clips[i]}")
-            
-            filter_concat = f"\"concat=n={len(audio_clips)}:v=0:a=1[a]\" -map \"[a]\""
-            
-            audio_concat_cmd = f"ffmpeg {' '.join(filter_inputs)} -filter_complex {filter_concat} {temp_audio_path} -y"
-            print(f"Running audio concat command: {audio_concat_cmd}")
-            os.system(audio_concat_cmd)
+            try:
+                audio_streams = [ffmpeg.input(f) for f in audio_clips]
+                (
+                    ffmpeg.concat(*audio_streams, v=0, a=1)
+                    .output(temp_audio_path)
+                    .overwrite_output()
+                    .run(capture_stdout=True, capture_stderr=True)
+                )
+                print(f"Successfully concatenated {len(audio_clips)} audio files.")
+            except ffmpeg.Error as e:
+                print(f"ERROR: Failed to create concatenated audio: {e.stderr.decode()}")
+                # Fallback to using just the first audio clip
+                if audio_clips and os.path.exists(audio_clips[0]):
+                    print("Falling back to using first audio clip only")
+                    temp_audio_path = audio_clips[0]
+                else:
+                    print("No usable audio clips found")
+                    return None
             
             if not os.path.exists(temp_audio_path):
                 print(f"ERROR: Failed to create concatenated audio at {temp_audio_path}")
                 # Fallback to using just the first audio clip
-                if audio_clips and os.path.exists(audio_clips[0]):
-                    print(f"Falling back to using first audio clip only")
-                    temp_audio_path = audio_clips[0]
-                else:
-                    print(f"No usable audio clips found")
-                    return None
         
         # Check audio duration
         try:
@@ -166,56 +221,65 @@ def compose_video(video_assets: List[str], audio_clips: List[str], output_path: 
             print(f"WARNING: Error probing audio: {e}")
             audio_duration = total_audio_duration  # Use the sum as fallback
         
-        # STEP 3: Combine video and audio, and ensure it matches the audio duration
+        # STEP 4: Combine video and audio, and ensure it matches the audio duration
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
-        # Final output command with duration limiting
-        final_cmd = [
-            'ffmpeg',
-            '-i', temp_video_path,
-            '-i', temp_audio_path,
-            '-map', '0:v:0',
-            '-map', '1:a:0',
-            '-c:v', 'libx264',
-            '-c:a', 'aac',
-            '-shortest',  # End when shortest input (likely the audio) ends
-            '-pix_fmt', 'yuv420p',
-            '-y',
-            output_path
-        ]
-        print(f"Running final command: {' '.join(final_cmd)}")
-        os.system(' '.join(final_cmd))
-        
-        # Clean up temporary files (except for audio if we're using an original clip)
         try:
-            os.remove(concat_file_path)
-            if len(audio_clips) > 1 and temp_audio_path not in audio_clips:
-                os.remove(temp_audio_path)
-            os.remove(temp_video_path)
-        except Exception as e:
-            print(f"Warning: Could not clean up temp files: {e}")
+            video_stream = ffmpeg.input(temp_video_path)
+            audio_stream = ffmpeg.input(temp_audio_path)
+            
+            (
+                ffmpeg.output(
+                    video_stream['v'], 
+                    audio_stream['a'], 
+                    output_path,
+                    t=audio_duration,
+                    **{'c:v': 'libx264', 'c:a': 'aac', 'pix_fmt': 'yuv420p'}
+                )
+                .overwrite_output()
+                .run(capture_stdout=True, capture_stderr=True)
+            )
+            print(f"Successfully created final video at {output_path}")
+
+        except ffmpeg.Error as e:
+            print(f"ERROR: Failed to create final video: {e.stderr.decode()}")
+            # Set output_path to None to indicate failure
+            output_path = None
         
-        # Verify output
-        if os.path.exists(output_path):
+        finally:
+            # Clean up all temporary files
             try:
-                output_info = ffmpeg.probe(output_path)
-                output_duration = float(output_info['format']['duration'])
-                print(f"DEBUG: Output video duration: {output_duration:.2f} seconds")
-                
-                # Check that the duration matches what we expect
-                if output_duration < 1.0:
-                    print(f"WARNING: Final video is too short ({output_duration:.2f}s)")
-                
-                end_time = time.time()
-                render_time = end_time - start_time
-                print(f"Video composed successfully in {render_time:.2f} seconds.")
-                print("---------------------------------")
-                return output_path
-            except Exception as e:
-                print(f"DEBUG: Error probing output video: {str(e)}")
-                return None
-        else:
-            print(f"DEBUG: Output file doesn't exist: {output_path}")
+                if len(audio_clips) > 1 and temp_audio_path not in audio_clips and os.path.exists(temp_audio_path):
+                    os.remove(temp_audio_path)
+                if os.path.exists(temp_video_path):
+                    os.remove(temp_video_path)
+                for video in normalized_videos:
+                    if os.path.exists(video):
+                        os.remove(video)
+            except Exception as cleanup_e:
+                print(f"Warning: Could not clean up temp files: {cleanup_e}")
+
+        if not output_path or not os.path.exists(output_path):
+            print(f"DEBUG: Output file creation failed or file does not exist: {output_path}")
+            return None
+
+        # Verify output
+        try:
+            output_info = ffmpeg.probe(output_path)
+            output_duration = float(output_info['format']['duration'])
+            print(f"DEBUG: Output video duration: {output_duration:.2f} seconds")
+            
+            # Check that the duration matches what we expect
+            if output_duration < 1.0:
+                print(f"WARNING: Final video is too short ({output_duration:.2f}s)")
+            
+            end_time = time.time()
+            render_time = end_time - start_time
+            print(f"Video composed successfully in {render_time:.2f} seconds.")
+            print("---------------------------------")
+            return output_path
+        except Exception as e:
+            print(f"DEBUG: Error probing output video: {str(e)}")
             return None
 
     except Exception as e:

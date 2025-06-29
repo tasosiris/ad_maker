@@ -1,9 +1,9 @@
 import asyncio
 import os
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List, Dict, Optional
 from jinja2 import Environment, FileSystemLoader
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 
 from src.config import OPENAI_API_KEY, OPENAI_MODEL
 from src.database import get_db, Job, Script as DbScript
@@ -13,6 +13,14 @@ from sqlalchemy.orm import Session
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY is not set. Please check your .env file.")
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+SYSTEM_PROMPT = "\n".join([
+    "You are an expert scriptwriter for viral social media videos.",
+    "Your goal is to create a script that is engaging, informative, and optimized for the specified platform (long-form or short-form).",
+    "Your output MUST be ONLY the script text. Do not include any headers, explanations, or markdown formatting.",
+    "Use section markers like [HOOK], [INTRO], [VALUE], and [CTA] to structure the script, but these are for the video editor and should not be spoken.",
+    "The tone should be enthusiastic and persuasive, designed to capture and hold the viewer's attention."
+])
 
 @dataclass
 class Script:
@@ -33,10 +41,25 @@ def setup_jinja_env():
     template_dir = os.path.join(os.path.dirname(__file__), '..', 'templates')
     return Environment(loader=FileSystemLoader(template_dir))
 
-async def generate_single_script(template, idea: str, category: str, script_type: str, revision_notes: str = "") -> str:
+async def generate_single_script(template, idea: str, category: str, script_type: str, revision_notes: str = "", product: Optional[Dict[str, str]] = None) -> str:
     """Generates a single script using a template and OpenAI."""
-    base_prompt = template.render(idea=idea, category=category)
-    
+    if product:
+        # If a product is provided, create a more specific prompt
+        base_prompt = (
+            f"Create a {script_type} video script for the following product idea: '{idea}'.\n"
+            f"The script MUST be about this specific product: **{product['name']}**.\n"
+            f"The target audience is interested in {category}.\n"
+            f"Use this URL for reference: {product.get('url', 'N/A')}\n"
+            "The output should be the raw script text only, with a strong hook, clear value proposition, and a compelling call to action."
+        )
+    else:
+        # Generic prompt if no specific product is found
+        base_prompt = (
+            f"Create a {script_type} video script for the following product idea: '{idea}'.\n"
+            f"The target audience is interested in {category}.\n"
+            "The output should be the raw script text only, with a strong hook, clear value proposition, and a compelling call to action."
+        )
+
     if revision_notes:
         final_prompt = f"{base_prompt}\n\nPlease revise the script based on these notes: {revision_notes}"
     else:
@@ -52,7 +75,7 @@ async def generate_single_script(template, idea: str, category: str, script_type
     print(f"Finished generating {script_type} script for '{idea}'.")
     return generated_content if generated_content else ""
 
-async def generate_scripts_for_idea(job: Job, num_long: int, num_short: int) -> ScriptBundle:
+async def generate_scripts_for_idea(job: Job, num_long: int, num_short: int, product: Optional[Dict[str, str]] = None) -> ScriptBundle:
     """
     Generates and saves a bundle of scripts for a single idea.
     """
@@ -63,11 +86,11 @@ async def generate_scripts_for_idea(job: Job, num_long: int, num_short: int) -> 
     tasks = []
     # Generate long-form scripts
     for _ in range(num_long):
-        tasks.append(generate_single_script(long_form_template, job.idea, job.category, 'long_form'))
+        tasks.append(generate_single_script(long_form_template, job.idea, job.category, 'long_form', product=product))
     
     # Generate short-form scripts
     for _ in range(num_short):
-        tasks.append(generate_single_script(short_form_template, job.idea, job.category, 'short_form'))
+        tasks.append(generate_single_script(short_form_template, job.idea, job.category, 'short_form', product=product))
 
     generated_contents = await asyncio.gather(*tasks)
     
