@@ -1,0 +1,31 @@
+# API Keys - Replace with your actual keys
+api_keys:
+  llm_provider: "your_llm_api_key_here" # e.g., OpenAI, Anthropic
+  veo_sdk: "your_veo_api_key_here"
+  pexels: "your_pexels_api_key_here"
+  elevenlabs: "your_elevenlabs_api_key_here"
+  youtube: "your_youtube_api_key_here"
+
+# Default settings for video generation
+video_defaults:
+  resolution: "1080p"
+  fps: 30
+  long_form_duration_minutes: 8
+  short_form_duration_seconds: 59
+
+# Voiceover settings
+tts_defaults:
+  voice_id: "Adam" # Default voice from ElevenLabs or other TTS provider
+  style: "Narration"
+
+# Database configuration
+database:
+  type: "sqlite" # or "postgresql"
+  path: "db/state.db" # for sqlite
+  # connection_string: "postgresql://user:password@host:port/dbname" # for postgresql
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "json" # 'json' or 'text'
+  file: "logs/app.log" 

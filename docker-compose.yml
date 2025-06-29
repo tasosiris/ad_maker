@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: video-generation-agent
+    command: python main.py run-full-pipeline
+    volumes:
+      # Mount output and temp directories to persist data outside the container
+      - ./output:/app/output
+      - ./temp:/app/temp
+      - ./logs:/app/logs
+      - ./db:/app/db
+    env_file:
+      # Use a .env file to manage secrets and environment-specific configs
+      - .env
+
+  # Optional: Add other services like a database or a monitoring stack
+  #
+  # postgres:
+  #   image: postgres:13
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data/
+  #   environment:
+  #     - POSTGRES_DB=your_db
+  #     - POSTGRES_USER=your_user
+  #     - POSTGRES_PASSWORD=your_password
+  #
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   ports:
+  #     - "3000:3000"
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
+
+volumes:
+  # postgres_data:
+  # grafana_data:
+  output_data:
+  temp_data: 
