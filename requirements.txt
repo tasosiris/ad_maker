@@ -1,0 +1,37 @@
+# Core Application
+click
+python-dotenv>=1.0.0
+pyyaml>=6.0
+loguru
+jinja2>=3.0.0
+
+# AI & API Services
+openai>=1.0.0
+elevenlabs>=0.2.24
+pexels-api-py>=1.0.0
+sqlalchemy>=2.0.0
+
+# Video & Audio Processing
+ffmpeg-python>=0.2.0
+
+# Development & Testing
+pytest>=7.0.0
+flake8
+black
+bandit
+
+# For testing
+vcrpy
+
+# For linting
+flake8
+black
+
+# For security scanning
+bandit
+
+# Additional dependencies
+pydantic>=2.0.0
+requests>=2.28.0
+pillow>=9.0.0
+numpy>=1.22.0 

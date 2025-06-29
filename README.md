@@ -1,104 +1,116 @@
-# AI-Powered Video Generation Agent
+# Ads AI
 
-This project is a Python-based, modular, agent-driven pipeline that automates the end-to-end production of faceless YouTube content.
+An AI-powered system for automatically generating video advertisements.
 
 ## Overview
 
-The system is designed to:
-- Generate niche product ideas for affiliate marketing.
-- Produce multiple long-form and short-form scripts for each idea.
-- Assemble videos using API-driven assets, AI voiceovers, and FFmpeg.
-- Operate with minimal human intervention.
+This project uses AI to create video advertisements by:
+1. Generating creative ad ideas
+2. Creating scripts for those ideas
+3. Fetching relevant video clips
+4. Generating voiceovers using text-to-speech
+5. Composing final videos with proper timing and synchronization
 
-## Project Structure
+## Features
 
-```
-.
-├── src/
-│   ├── agents/
-│   │   ├── idea_selector.py
-│   │   ├── idea_generator.py
-│   │   ├── script_generator.py
-│   │   └── video_composer.py
-│   ├── controllers/
-│   │   └── feedback.py
-│   ├── utils/
-│   │   └── output_manager.py
-│   ├── assets/
-│   ├── tts/
-│   ├── editing/
-│   └── templates/
-├── tests/
-├── output/
-├── temp/
-├── .env.example
-├── config.yaml
-├── niches.json
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
-└── main.py
-```
+- **Idea Generation**: Uses AI to generate creative ad concepts
+- **Script Writing**: Creates both long-form and short-form ad scripts
+- **Asset Collection**: Automatically fetches relevant video clips from Pexels
+- **Text-to-Speech**: Converts scripts to high-quality voiceovers
+- **Video Composition**: Assembles all elements into the final advertisement
 
-## Getting Started
+## Installation
 
 ### Prerequisites
 
-- Python 3.10+
-- Docker and Docker Compose
-- FFmpeg (must be installed on the system if not using Docker)
+- Python 3.8+
+- FFmpeg
+- SQLite
 
 ### Setup
 
-1.  **Clone the repository:**
-    ```bash
-    git clone <repository-url>
-    cd <repository-name>
-    ```
+1. Clone this repository:
+   ```
+   git clone <repository-url>
+   cd Ads_AI
+   ```
 
-2.  **Create the environment file:**
+2. Create and activate a virtual environment:
+   ```
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
 
-    This project uses an `.env` file for managing API keys and other secrets. I am unable to create this file for you. Please create it manually:
+3. Install dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
 
-    ```bash
-    cp .env.example .env
-    ```
+4. Create a `.env` file based on `.env.example`:
+   ```
+   cp .env.example .env
+   ```
 
-    Now, open the `.env` file and fill in your actual API keys and configuration details.
-
-3.  **Build and run the Docker container:**
-    ```bash
-    docker-compose build
-    docker-compose up
-    ```
-    This will start the main application pipeline as defined in `docker-compose.yml`.
-
-### Local Development (Without Docker)
-
-1.  **Install Python dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-2.  **Set Environment Variables:**
-    Ensure the variables from the `.env` file are loaded into your shell. You can use a library like `python-dotenv` for this or source them manually.
-
-3.  **Run the application:**
-    The main entry point is `main.py`. You can run different parts of the pipeline using the CLI.
-    ```bash
-    # See available commands
-    python main.py --help
-
-    # Run the full pipeline
-    python main.py run-full-pipeline
-
-    # Run only idea generation
-    python main.py run-idea-generation
-    ```
+5. Edit the `.env` file to add your API keys:
+   - OpenAI API key for GPT models
+   - ElevenLabs API key for voice synthesis
+   - Pexels API key for video assets
 
 ## Usage
 
-The primary way to run the agent is through the `run-full-pipeline` command, which will guide you through the process of selecting a category and generating a video.
+### Running the Application
 
----
-*This project was bootstrapped by an AI assistant.* 
+```
+python main.py
+```
+
+### Creating a Demo Video
+
+```
+python create_demo_video.py
+```
+
+### Testing Video Fetching
+
+```
+python test_video_fetcher.py
+```
+
+## Project Structure
+
+- `src/agents/`: AI components for different tasks
+- `src/assets/`: Asset fetching and management
+- `src/tts/`: Text-to-speech functionality
+- `src/editing/`: Video editing and composition
+- `src/templates/`: Script templates
+- `src/utils/`: Utility functions
+- `db/`: Database files
+- `output/`: Generated videos
+- `temp/`: Temporary files and cache
+
+## Configuration
+
+Edit `config.yaml` to adjust settings like:
+- Model selection
+- Output formats
+- Video parameters
+- Asset preferences
+
+## Docker
+
+You can also run this application using Docker:
+
+```
+docker-compose up
+```
+
+## License
+
+[Specify your license here]
+
+## Credits
+
+- Uses OpenAI's GPT models for text generation
+- Uses ElevenLabs for voice synthesis
+- Uses Pexels for video assets
+- FFmpeg for video processing
