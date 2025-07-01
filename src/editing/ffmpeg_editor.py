@@ -17,7 +17,7 @@ def get_video_resolution(resolution_str: str) -> (int, int):
     # Add more formats if needed
     raise ValueError(f"Unsupported resolution format: {resolution_str}")
 
-def compose_video(video_assets: List[str], audio_clips: List[str], output_path: str):
+def compose_video(video_assets: List[str], audio_clips: List[str], output_path: str, background_music_path: str = None):
     """
     Constructs a video from assets and audio using real FFmpeg commands.
     Uses a simpler approach to avoid filter graph issues.
@@ -225,20 +225,44 @@ def compose_video(video_assets: List[str], audio_clips: List[str], output_path: 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
         try:
-            video_stream = ffmpeg.input(temp_video_path)
-            audio_stream = ffmpeg.input(temp_audio_path)
+            video_input = ffmpeg.input(temp_video_path)
+            voice_audio_input = ffmpeg.input(temp_audio_path)
             
-            (
-                ffmpeg.output(
-                    video_stream['v'], 
-                    audio_stream['a'], 
-                    output_path,
-                    t=audio_duration,
-                    **{'c:v': 'libx264', 'c:a': 'aac', 'pix_fmt': 'yuv420p'}
+            if background_music_path and os.path.exists(background_music_path):
+                print(f"Adding background music: {background_music_path}")
+                music_input = ffmpeg.input(background_music_path, stream_loop=-1) # Loop infinitely
+                
+                # Mix audio streams
+                mixed_audio = ffmpeg.filter_complex(
+                    [voice_audio_input, music_input],
+                    '[0:a]volume=1.0[a0]; [1:a]volume=0.15[a1]; [a0][a1]amix=inputs=2:duration=first'
                 )
-                .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True)
-            )
+                
+                (
+                    ffmpeg.output(
+                        video_input['v'], 
+                        mixed_audio, 
+                        output_path,
+                        t=audio_duration,
+                        **{'c:v': 'libx264', 'c:a': 'aac', 'pix_fmt': 'yuv420p'}
+                    )
+                    .overwrite_output()
+                    .run(capture_stdout=True, capture_stderr=True)
+                )
+
+            else:
+                (
+                    ffmpeg.output(
+                        video_input['v'], 
+                        voice_audio_input['a'], 
+                        output_path,
+                        t=audio_duration,
+                        **{'c:v': 'libx264', 'c:a': 'aac', 'pix_fmt': 'yuv420p'}
+                    )
+                    .overwrite_output()
+                    .run(capture_stdout=True, capture_stderr=True)
+                )
+
             print(f"Successfully created final video at {output_path}")
 
         except ffmpeg.Error as e:

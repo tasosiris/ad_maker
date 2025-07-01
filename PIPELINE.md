@@ -78,20 +78,25 @@ Below is a detailed breakdown of each step.
 *   **Script(s) Involved**: `main.py`, `src/agents/script_generator.py`, `src/templates/`
 *   **Input**: The selected ad idea, chosen product (optional), and desired script format (`long` or `short`).
 *   **Output**: A complete script object.
-*   **Example Snippet (Short Form)**:
+*   **Example Snippet (Short Form Vlog-Style)**:
     ```json
     {
-      "title": "The Last Knife You'll Ever Need",
+      "title": "The Knife Set That Actually Changed My Kitchen Game",
       "scenes": [
         {
           "scene_number": 1,
-          "narration": "Tired of dull knives that can't even cut a tomato?",
-          "visual_cue": "Close-up shot of a knife struggling to slice a tomato, squishing it instead."
+          "narration": "So, I've been using the Calphalon Self-Sharpening Knife Set for about a month now, and I have to say, I'm seriously impressed. I used to HATE prepping veggies because my old knives were so dull.",
+          "visual_cue": "Vlogger-style shot of a person talking directly to the camera in their kitchen, holding a chef's knife."
         },
         {
           "scene_number": 2,
-          "narration": "Introducing the Calphalon Self-Sharpening Knife Set. Every time you pull out a knife, it's perfectly sharp.",
-          "visual_cue": "Show the Calphalon knife block. A hand smoothly pulls out a chef's knife."
+          "narration": "But check this out. Every time you pull a knife out of this block, it gets sharpened. Last night, I was making a stir-fry, and chopping everything was so... satisfying. It just glides right through.",
+          "visual_cue": "Close-up shot of a tomato being sliced effortlessly. Quick cuts of various vegetables being prepped."
+        },
+        {
+          "scene_number": 3,
+          "narration": "If you're tired of struggling with dull knives, you've got to check this out. I'll drop a link in the description.",
+          "visual_cue": "The vlogger gives a thumbs-up to the camera, with the knife block visible in the background."
         }
       ]
     }
@@ -180,36 +185,3 @@ Contains comprehensive information about the video:
 ### 3. Script Text File (`.txt`)
 A human-readable version of all the information:
 ```
-TITLE: Smart Kitchen Knife Block Review
-CATEGORY: Kitchen_Gadgets
-IDEA: A funny ad showing someone struggling with old, dull knives...
-PRODUCT: Calphalon Classic Self-Sharpening 15-piece Knife Block Set
-COMMISSION: 3-8%
-LINK: https://amazon.com/product-link
-
-==================================================
-SCRIPT CONTENT:
-==================================================
-
-[Full script content here...]
-```
-
----
-
-## Affiliate Information
-
-The system automatically extracts and stores affiliate commission information:
-
-- **Commission Rates**: Estimated based on product type and detected from search results
-- **Product Links**: Direct URLs to the products found during the search process
-- **Default Rates**: 
-  - Amazon products: 1-10%
-  - Kitchen/Home products: 3-8%
-  - Electronics: 2-6%
-  - General products: 3-7%
-
-This information is saved with every video, making it easy to:
-- Track potential earnings
-- Update affiliate links
-- Upload to platforms with proper attribution
-- Maintain records for tax purposes 

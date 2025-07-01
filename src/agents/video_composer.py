@@ -4,8 +4,9 @@ import ffmpeg
 from dataclasses import dataclass
 from typing import List, Optional
 import re
+import random
 
-# Adjust imports to match the project structure
+from src.utils.logger import logger
 from src.assets.fetcher import fetch_clips
 from src.tts.voice import generate_voice, VoiceClip
 from src.editing.ffmpeg_editor import compose_video
@@ -59,29 +60,44 @@ def get_script(db: Session, script_id: int) -> Script:
     """Retrieves a script from the database."""
     return db.query(Script).filter(Script.id == script_id).first()
 
+def get_music_tracks(music_dir: str = "src/assets/music") -> List[str]:
+    """Finds available music tracks in the specified directory."""
+    if not os.path.isdir(music_dir):
+        return []
+    
+    supported_formats = ('.mp3', '.wav', '.aac', '.m4a')
+    music_files = [os.path.join(music_dir, f) for f in os.listdir(music_dir) if f.endswith(supported_formats)]
+    
+    if music_files:
+        logger.info(f"Found {len(music_files)} music tracks: {', '.join(os.path.basename(p) for p in music_files)}")
+    else:
+        logger.warning(f"No music tracks found in '{music_dir}'.")
+        
+    return music_files
+
 def run_video_composition(db: Session, script: Script):
     """
     Orchestrates the entire video creation process for a single approved script.
     """
     job = script.job
-    print(f"\n===== Starting Video Composition for Script ID: {script.id} (Job: {job.idea}) =====")
+    logger.info(f"===== Starting Video Composition for Script ID: {script.id} (Job: {job.idea}) =====")
     job.status = 'rendering'
     db.commit()
 
     # 1. Generate Voiceover from the script content
-    print("\nStep 1: Generating Voiceover...")
+    logger.info("Step 1: Generating Voiceover...")
     script_content = str(script.content or '')
     voice_clips = generate_voice(script_id=script.id, text=script_content)
     if not voice_clips:
-        print(f"Error: Voiceover generation failed for script {script.id}. Aborting.")
+        logger.error(f"Voiceover generation failed for script {script.id}. Aborting.")
         job.status = 'render_failed'
         db.commit()
         return
     
-    print(f"DEBUG: Generated {len(voice_clips)} audio clips from script sentences.")
+    logger.info(f"Generated {len(voice_clips)} audio clips from script sentences.")
     
     # 2. Measure audio clips and prepare scenes
-    print("\nStep 2: Measuring audio clips and preparing scenes...")
+    logger.info("Step 2: Measuring audio clips and preparing scenes...")
     scenes: List[Scene] = []
     total_audio_duration = 0
     
@@ -96,37 +112,37 @@ def run_video_composition(db: Session, script: Script):
                     duration=duration
                 )
                 total_audio_duration += duration
-                print(f"DEBUG: Audio clip '{os.path.basename(clip.audio_path)}' - Duration: {duration:.2f}s - Text: '{clip.text[:30]}...'")
+                logger.info(f"Audio clip '{os.path.basename(clip.audio_path)}' - Duration: {duration:.2f}s - Text: '{clip.text[:30]}...'")
 
                 # 3. Fetch a relevant video for this specific sentence
-                print(f"  -> Fetching video for: '{timed_clip.text}'")
+                logger.info(f"  -> Fetching video for: '{timed_clip.text}'")
                 video_asset = fetch_relevant_clip(timed_clip, job)
                 
                 if video_asset:
                     scenes.append(Scene(voice_clip=timed_clip, video_path=video_asset))
                 else:
-                    print(f"  WARNING: Could not find a suitable video for the sentence. It will be skipped.")
+                    logger.warning(f"Could not find a suitable video for the sentence. It will be skipped.")
 
             except Exception as e:
-                print(f"WARNING: Error probing audio clip {clip.audio_path}: {e}")
+                logger.error(f"Error probing audio clip {clip.audio_path}: {e}")
         else:
-            print(f"WARNING: Audio clip file not found: {clip.audio_path}")
+            logger.warning(f"Audio clip file not found: {clip.audio_path}")
     
     if not scenes:
-        print("ERROR: No scenes could be created. Aborting.")
+        logger.error("No scenes could be created. Aborting.")
         job.status = 'render_failed'
         db.commit()
         return
 
-    print(f"DEBUG: Created {len(scenes)} scenes for the video. Total audio duration: {total_audio_duration:.2f}s")
+    logger.info(f"Created {len(scenes)} scenes for the video. Total audio duration: {total_audio_duration:.2f}s")
     
     # 4. Compose the final video from scenes
-    print("\n--- Voice Clips for Final Video ---")
+    logger.info("--- Voice Clips for Final Video ---")
     for i, scene in enumerate(scenes):
-        print(f"Clip {i+1}: \"{scene.voice_clip.text}\"")
-    print("------------------------------------")
+        logger.info(f"Clip {i+1}: \"{scene.voice_clip.text}\"")
+    logger.info("------------------------------------")
     
-    print("\nStep 4: Composing Video with FFmpeg...")
+    logger.info("Step 4: Composing Video with FFmpeg...")
     timestamp = int(time.time())
     output_dir = f"output/{job.category.replace(' ', '_')}/{job.idea.replace(' ', '_')}/{script.script_type}"
     os.makedirs(output_dir, exist_ok=True)
@@ -136,17 +152,32 @@ def run_video_composition(db: Session, script: Script):
     video_paths = [scene.video_path for scene in scenes]
     audio_paths = [scene.voice_clip.audio_path for scene in scenes]
     
-    final_video_path = compose_video(video_paths, audio_paths, output_path)
+    # 5. Select background music
+    logger.info("Step 5: Selecting Background Music...")
+    music_tracks = get_music_tracks()
+    background_music = random.choice(music_tracks) if music_tracks else None
+    
+    if background_music:
+        logger.info(f"Selected background music: {os.path.basename(background_music)}")
+    else:
+        logger.info("No background music will be added.")
+
+    final_video_path = compose_video(
+        video_paths, 
+        audio_paths, 
+        output_path,
+        background_music_path=background_music
+    )
     
     if final_video_path and os.path.exists(final_video_path):
         try:
             # Verify the output video has a reasonable duration
             output_info = ffmpeg.probe(final_video_path)
             output_duration = float(output_info['format']['duration'])
-            print(f"DEBUG: Final output video duration: {output_duration:.2f}s")
+            logger.info(f"Final output video duration: {output_duration:.2f}s")
             
             if output_duration < 1.0:
-                print(f"WARNING: Final video is too short ({output_duration:.2f}s)!")
+                logger.warning(f"Final video is too short ({output_duration:.2f}s)!")
                 job.status = 'render_failed'
                 db.commit()
             else:
@@ -155,17 +186,17 @@ def run_video_composition(db: Session, script: Script):
                 
                 job.status = 'done'
                 db.commit()
-                print(f"\n===== Finished Video Composition for: {job.idea} =====")
-                print(f"Final video saved to: {final_video_path}")
-                print(f"Metadata saved to: {final_video_path.replace('.mp4', '.json')}")
+                logger.info(f"===== Finished Video Composition for: {job.idea} =====")
+                logger.info(f"Final video saved to: {final_video_path}")
+                logger.info(f"Metadata saved to: {final_video_path.replace('.mp4', '.json')}")
         except Exception as e:
-            print(f"ERROR: Failed to probe final video: {e}")
+            logger.error(f"Failed to probe final video: {e}")
             job.status = 'render_failed'
             db.commit()
     else:
         job.status = 'render_failed'
         db.commit()
-        print(f"\n===== Video Composition FAILED for: {job.idea} =====")
+        logger.error(f"===== Video Composition FAILED for: {job.idea} =====")
 
 def fetch_relevant_clip(timed_clip: TimedVoiceClip, job: Job) -> Optional[str]:
     """
@@ -174,17 +205,17 @@ def fetch_relevant_clip(timed_clip: TimedVoiceClip, job: Job) -> Optional[str]:
     """
     keywords = extract_keywords(timed_clip.text)
     query = f"{keywords} {job.category}" if keywords else f"{job.idea} {job.category}"
-    print(f"  -> Asset search query: '{query}'")
+    logger.info(f"  -> Asset search query: '{query}'")
 
     video_assets = fetch_clips(query, num_clips=5)
     
     if not video_assets:
-        print(f"  -> No initial video assets found. Trying a broader search...")
+        logger.warning(f"No initial video assets found. Trying a broader search...")
         fallback_query = f"{job.idea} {job.category}"
         video_assets = fetch_clips(fallback_query, num_clips=5)
 
     if not video_assets:
-        print(f"  -> Fallback search also failed. No suitable clips found.")
+        logger.warning(f"Fallback search also failed. No suitable clips found.")
         return None
 
     # Find the best-fitting clip
@@ -203,13 +234,13 @@ def fetch_relevant_clip(timed_clip: TimedVoiceClip, job: Job) -> Optional[str]:
                         smallest_duration_diff = duration_diff
                         best_clip = asset_path
             except Exception as e:
-                print(f"  -> WARNING: Could not probe candidate video {asset_path}: {e}")
+                logger.error(f"  -> Could not probe candidate video {asset_path}: {e}")
 
     if best_clip:
-        print(f"  -> Found best-fit clip: {os.path.basename(best_clip)} (Duration diff: {smallest_duration_diff:.2f}s)")
+        logger.info(f"  -> Found best-fit clip: {os.path.basename(best_clip)} (Duration diff: {smallest_duration_diff:.2f}s)")
         return best_clip
     
-    print(f"  -> WARNING: No fetched video clips met the duration requirement of {timed_clip.duration:.2f}s.")
+    logger.warning(f"No fetched video clips met the duration requirement of {timed_clip.duration:.2f}s.")
     return None
 
 def save_video_metadata(job: Job, script: Script, video_path: str):
@@ -314,20 +345,20 @@ def save_video_metadata(job: Job, script: Script, video_path: str):
         f.write(f"{'='*50}\n\n")
         f.write(script_content)
     
-    print(f"  -> Saved metadata: {metadata_path}")
-    print(f"  -> Saved script text: {script_path}")
+    logger.info(f"  -> Saved metadata: {metadata_path}")
+    logger.info(f"  -> Saved script text: {script_path}")
 
 def main(db: Session):
     """Demonstrates a full video composition workflow with a database script."""
-    print("--- Finding an approved script to render ---")
+    logger.info("--- Finding an approved script to render ---")
     
     # Find an approved script that hasn't been rendered
     approved_script = db.query(Script).join(Job).filter(Job.status == 'approved', Script.status == 'approved').first()
 
     if not approved_script:
-        print("No approved scripts ready for video composition.")
+        logger.warning("No approved scripts ready for video composition.")
         # Create a dummy job and script for demonstration
-        print("Creating a dummy approved job/script for demonstration...")
+        logger.info("Creating a dummy approved job/script for demonstration...")
         dummy_job = Job(idea="Live Demo Smart Pen", category="Productivity Tools", status="approved")
         db.add(dummy_job)
         db.commit()
@@ -342,7 +373,7 @@ def main(db: Session):
         db.add(approved_script)
         db.commit()
         db.refresh(approved_script)
-        print(f"Created dummy script with ID: {approved_script.id}")
+        logger.info(f"Created dummy script with ID: {approved_script.id}")
 
     run_video_composition(db, approved_script)
     

@@ -42,28 +42,45 @@ def setup_jinja_env():
     return Environment(loader=FileSystemLoader(template_dir))
 
 async def generate_single_script(template, idea: str, category: str, script_type: str, revision_notes: str = "", product: Optional[Dict[str, str]] = None) -> str:
-    """Generates a single script using a template and OpenAI."""
+    """Generates a single script using a given template and idea."""
+    
+    # New vlog-style prompt instructions
+    style_prompt = (
+        "The script MUST be written in a personal, first-person, vlog-style tone. "
+        "It should sound like a real person sharing their genuine experience with the product. "
+        "Include personal anecdotes and specific examples of when the product was useful. "
+        "Make it conversational, authentic, and engaging."
+    )
+
     if product:
         # If a product is provided, create a more specific prompt
-        base_prompt = (
-            f"Create a {script_type} video script for the following product idea: '{idea}'.\n"
-            f"The script MUST be about this specific product: **{product['name']}**.\n"
-            f"The target audience is interested in {category}.\n"
-            f"Use this URL for reference: {product.get('url', 'N/A')}\n"
-            "The output should be the raw script text only, with a strong hook, clear value proposition, and a compelling call to action."
+        product_details = f"The script MUST be about this specific product: **{product['name']}**.\n"
+        if product.get('url'):
+            product_details += f"Use this URL for reference: {product.get('url')}\n"
+        if product.get('details'):
+            product_details += f"Here are some details about it: {product.get('details')}\n"
+
+        prompt_text = (
+            f"Create a {script_type} vlog-style video script for the following product idea: '{idea}'.\n"
+            f"{product_details}"
+            f"{style_prompt}\n"
+            "Here's an example of the tone: 'I was skeptical at first, but this thing has been a lifesaver. "
+            "Last week, I was on a business trip, and I actually used it to...'."
         )
     else:
         # Generic prompt if no specific product is found
-        base_prompt = (
-            f"Create a {script_type} video script for the following product idea: '{idea}'.\n"
-            f"The target audience is interested in {category}.\n"
-            "The output should be the raw script text only, with a strong hook, clear value proposition, and a compelling call to action."
+        prompt_text = (
+            f"Create a {script_type} vlog-style video script for the following product idea: '{idea}'.\n"
+            f"The category is '{category}'.\n"
+            f"{style_prompt}\n"
+            "Even though there's no specific product, invent one and talk about it from a personal perspective. "
+            "For example: 'I've been using this new smart blender for a month now, and it's completely changed my morning routine...'"
         )
 
     if revision_notes:
-        final_prompt = f"{base_prompt}\n\nPlease revise the script based on these notes: {revision_notes}"
+        final_prompt = f"{prompt_text}\n\nPlease revise the script based on these notes: {revision_notes}"
     else:
-        final_prompt = base_prompt
+        final_prompt = prompt_text
 
     print(f"Generating {script_type} script for '{idea}'...")
     response = await client.chat.completions.create(
