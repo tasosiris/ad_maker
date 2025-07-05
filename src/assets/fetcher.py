@@ -17,6 +17,27 @@ PEXELS_HEADERS = {
 CACHE_DIR = Path(PROJECT_ROOT) / "temp" / "assets_cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+def clear_video_cache():
+    """
+    Clears all cached video files to free up space and ensure fresh downloads.
+    """
+    print("Clearing video cache...")
+    cleared_count = 0
+    total_size = 0
+    
+    if CACHE_DIR.exists():
+        for file_path in CACHE_DIR.glob("*.mp4"):
+            try:
+                file_size = file_path.stat().st_size
+                file_path.unlink()
+                cleared_count += 1
+                total_size += file_size
+                print(f"  - Removed: {file_path.name} ({file_size/1024:.1f} KB)")
+            except Exception as e:
+                print(f"  - Failed to remove {file_path.name}: {e}")
+    
+    print(f"Cache cleared: {cleared_count} files removed, {total_size/1024/1024:.1f} MB freed")
+
 def _download_file(url: str, local_filename: Path) -> str:
     """Downloads a file from a URL to a local path."""
     print(f"Downloading asset from {url}...")

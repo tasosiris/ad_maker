@@ -233,10 +233,9 @@ def compose_video(video_assets: List[str], audio_clips: List[str], output_path: 
                 music_input = ffmpeg.input(background_music_path, stream_loop=-1) # Loop infinitely
                 
                 # Mix audio streams
-                mixed_audio = ffmpeg.filter_complex(
-                    [voice_audio_input, music_input],
-                    '[0:a]volume=1.0[a0]; [1:a]volume=0.15[a1]; [a0][a1]amix=inputs=2:duration=first'
-                )
+                voice_stream = voice_audio_input.audio.filter('volume', 1.0)
+                music_stream = music_input.audio.filter('volume', 0.15)
+                mixed_audio = ffmpeg.filter([voice_stream, music_stream], 'amix', inputs=2, duration='first')
                 
                 (
                     ffmpeg.output(

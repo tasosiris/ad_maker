@@ -2,18 +2,25 @@ import os
 import time
 import ffmpeg
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import re
 import random
+import json
 
+from openai import OpenAI
+from src.config import OPENAI_API_KEY, OPENAI_MODEL
 from src.utils.logger import logger
-from src.assets.fetcher import fetch_clips
+from src.assets.fetcher import fetch_clips, clear_video_cache
 from src.tts.voice import generate_voice, VoiceClip
 from src.editing.ffmpeg_editor import compose_video
 from src.database import Script, Job
 from src.utils.output_manager import generate_metadata, save_video_with_metadata
 from sqlalchemy.orm import Session
-import json
+
+# Initialize OpenAI client
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY is not set. Please check your .env file.")
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 COMMON_WORDS = set([
     'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'being', 'been',
@@ -43,6 +50,67 @@ def extract_keywords(text: str, max_keywords: int = 5) -> str:
     # Return the most relevant keywords, joined into a string
     return ' '.join(keywords[:max_keywords])
 
+def generate_intelligent_video_query(text: str, category: str, idea: str) -> str:
+    """
+    Uses GPT to intelligently determine what type of video would be most appropriate 
+    for the given narration segment, then creates a targeted search query.
+    """
+    try:
+        prompt = f"""
+You are a video content strategist. Given a narration segment from a video script, determine what type of background video would be most visually engaging and appropriate.
+
+Narration segment: "{text}"
+Product category: "{category}"
+Overall video idea: "{idea}"
+
+Your task:
+1. Analyze the narration to understand what's being communicated
+2. Determine what type of visual would best support this narration
+3. Create a short, specific search query (3-5 words) that would find the perfect background video
+
+Guidelines:
+- For product demonstrations: focus on the product in use
+- For emotional appeals: focus on people, lifestyle, or scenarios
+- For statistics/facts: focus on relevant contexts or environments
+- For problems/solutions: focus on the problem scenario or solution in action
+- Keep it simple and specific - avoid generic terms
+
+Respond with ONLY the search query, nothing else.
+
+Examples:
+- Narration: "Tired of struggling with dull knives that can't even cut a tomato?"
+  Query: "struggling cutting tomato knife"
+  
+- Narration: "This revolutionary blender changed my morning routine completely"
+  Query: "person making smoothie blender"
+  
+- Narration: "Studies show that 80% of people don't get enough sleep"
+  Query: "tired person bedroom insomnia"
+
+Your search query:"""
+
+        response = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,  # Lower temperature for more consistent results
+            max_tokens=20  # Keep it short
+        )
+        
+        ai_query = response.choices[0].message.content.strip()
+        
+        # Clean up the query and add category for better results
+        ai_query = ai_query.replace('"', '').replace("'", '').strip()
+        final_query = f"{ai_query} {category}"
+        
+        logger.info(f"  -> AI-generated video query: '{final_query}'")
+        return final_query
+        
+    except Exception as e:
+        logger.warning(f"Failed to generate AI query: {e}. Falling back to keyword extraction.")
+        # Fallback to original method
+        keywords = extract_keywords(text)
+        return f"{keywords} {category}" if keywords else f"{idea} {category}"
+
 @dataclass
 class TimedVoiceClip:
     """Extends VoiceClip to include the audio duration."""
@@ -55,6 +123,16 @@ class Scene:
     """Represents a scene with synchronized audio and video."""
     voice_clip: TimedVoiceClip
     video_path: str
+
+@dataclass
+class SceneMapping:
+    """Represents detailed information about how a scene was created."""
+    sentence: str
+    query_used: str
+    fallback_query: Optional[str]
+    video_path: str
+    video_filename: str
+    duration_match: float
 
 def get_script(db: Session, script_id: int) -> Script:
     """Retrieves a script from the database."""
@@ -84,6 +162,9 @@ def run_video_composition(db: Session, script: Script):
     job.status = 'rendering'
     db.commit()
 
+    # Clear video cache before starting
+    clear_video_cache()
+
     # 1. Generate Voiceover from the script content
     logger.info("Step 1: Generating Voiceover...")
     script_content = str(script.content or '')
@@ -99,6 +180,7 @@ def run_video_composition(db: Session, script: Script):
     # 2. Measure audio clips and prepare scenes
     logger.info("Step 2: Measuring audio clips and preparing scenes...")
     scenes: List[Scene] = []
+    scene_mappings: List[SceneMapping] = []
     total_audio_duration = 0
     
     for clip in voice_clips:
@@ -116,7 +198,8 @@ def run_video_composition(db: Session, script: Script):
 
                 # 3. Fetch a relevant video for this specific sentence
                 logger.info(f"  -> Fetching video for: '{timed_clip.text}'")
-                video_asset = fetch_relevant_clip(timed_clip, job)
+                video_asset, mapping = fetch_relevant_clip(timed_clip, job)
+                scene_mappings.append(mapping)
                 
                 if video_asset:
                     scenes.append(Scene(voice_clip=timed_clip, video_path=video_asset))
@@ -144,7 +227,10 @@ def run_video_composition(db: Session, script: Script):
     
     logger.info("Step 4: Composing Video with FFmpeg...")
     timestamp = int(time.time())
-    output_dir = f"output/{job.category.replace(' ', '_')}/{job.idea.replace(' ', '_')}/{script.script_type}"
+    # Shorten the directory path to avoid filesystem limits
+    safe_category = job.category.replace(' ', '_')[:20]
+    safe_idea = job.idea.replace(' ', '_')[:30]
+    output_dir = f"output/{safe_category}/{safe_idea}/{script.script_type}"
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, f"script_{script.id}_{timestamp}.mp4")
     
@@ -182,7 +268,7 @@ def run_video_composition(db: Session, script: Script):
                 db.commit()
             else:
                 # Save metadata alongside the video
-                save_video_metadata(job, script, final_video_path)
+                save_video_metadata(job, script, final_video_path, scene_mappings)
                 
                 job.status = 'done'
                 db.commit()
@@ -198,25 +284,36 @@ def run_video_composition(db: Session, script: Script):
         db.commit()
         logger.error(f"===== Video Composition FAILED for: {job.idea} =====")
 
-def fetch_relevant_clip(timed_clip: TimedVoiceClip, job: Job) -> Optional[str]:
+def fetch_relevant_clip(timed_clip: TimedVoiceClip, job: Job) -> tuple[Optional[str], SceneMapping]:
     """
-    Fetches a video clip relevant to the sentence text. It aims to find a clip
-    with a duration as close as possible to the audio duration, but not shorter.
+    Fetches a video clip relevant to the sentence text using AI-powered query generation.
+    Returns both the video path and detailed mapping information.
     """
-    keywords = extract_keywords(timed_clip.text)
-    query = f"{keywords} {job.category}" if keywords else f"{job.idea} {job.category}"
-    logger.info(f"  -> Asset search query: '{query}'")
-
+    # Use AI to generate an intelligent search query
+    query = generate_intelligent_video_query(timed_clip.text, job.category, job.idea)
+    
     video_assets = fetch_clips(query, num_clips=5)
     
+    fallback_query = None
     if not video_assets:
         logger.warning(f"No initial video assets found. Trying a broader search...")
-        fallback_query = f"{job.idea} {job.category}"
+        # Try with just keywords as fallback
+        keywords = extract_keywords(timed_clip.text)
+        fallback_query = f"{keywords} {job.category}" if keywords else f"{job.idea} {job.category}"
+        logger.info(f"  -> Fallback query: '{fallback_query}'")
         video_assets = fetch_clips(fallback_query, num_clips=5)
 
     if not video_assets:
         logger.warning(f"Fallback search also failed. No suitable clips found.")
-        return None
+        mapping = SceneMapping(
+            sentence=timed_clip.text,
+            query_used=query,
+            fallback_query=fallback_query,
+            video_path="",
+            video_filename="No video found",
+            duration_match=0.0
+        )
+        return None, mapping
 
     # Find the best-fitting clip
     best_clip = None
@@ -238,18 +335,35 @@ def fetch_relevant_clip(timed_clip: TimedVoiceClip, job: Job) -> Optional[str]:
 
     if best_clip:
         logger.info(f"  -> Found best-fit clip: {os.path.basename(best_clip)} (Duration diff: {smallest_duration_diff:.2f}s)")
-        return best_clip
+        mapping = SceneMapping(
+            sentence=timed_clip.text,
+            query_used=query,
+            fallback_query=fallback_query,
+            video_path=best_clip,
+            video_filename=os.path.basename(best_clip),
+            duration_match=smallest_duration_diff
+        )
+        return best_clip, mapping
     
     logger.warning(f"No fetched video clips met the duration requirement of {timed_clip.duration:.2f}s.")
-    return None
+    mapping = SceneMapping(
+        sentence=timed_clip.text,
+        query_used=query,
+        fallback_query=fallback_query,
+        video_path="",
+        video_filename="No suitable video found",
+        duration_match=0.0
+    )
+    return None, mapping
 
-def save_video_metadata(job: Job, script: Script, video_path: str):
+def save_video_metadata(job: Job, script: Script, video_path: str, scene_mappings: List[SceneMapping]):
     """
     Saves comprehensive metadata alongside the video file, including:
     - Script content
     - Product information
     - Affiliate details
     - Video metadata
+    - Detailed scene mappings (queries and videos used)
     """
     # Generate a clean title from the job idea
     title = job.idea.replace('_', ' ').title()
@@ -296,6 +410,19 @@ def save_video_metadata(job: Job, script: Script, video_path: str):
     if job.product_name and job.product_url:
         affiliate_links[job.product_name] = job.product_url
     
+    # Convert scene mappings to serializable format
+    scene_details = []
+    for i, mapping in enumerate(scene_mappings):
+        scene_details.append({
+            "scene_number": i + 1,
+            "sentence": mapping.sentence,
+            "ai_query": mapping.query_used,
+            "fallback_query": mapping.fallback_query,
+            "video_used": mapping.video_filename,
+            "video_path": mapping.video_path,
+            "duration_match_seconds": mapping.duration_match
+        })
+    
     # Generate comprehensive metadata
     metadata = {
         "video_info": {
@@ -322,7 +449,8 @@ def save_video_metadata(job: Job, script: Script, video_path: str):
             "category": job.category,
             "created_at": str(job.created_at),
             "script_status": script.status
-        }
+        },
+        "scene_mappings": scene_details
     }
     
     # Save metadata to JSON file
@@ -345,8 +473,27 @@ def save_video_metadata(job: Job, script: Script, video_path: str):
         f.write(f"{'='*50}\n\n")
         f.write(script_content)
     
+    # Save detailed scene mapping as a separate readable file
+    mapping_path = video_path.replace('.mp4', '_scene_mapping.txt')
+    with open(mapping_path, 'w', encoding='utf-8') as f:
+        f.write(f"SCENE MAPPING REPORT\n")
+        f.write(f"{'='*50}\n\n")
+        f.write(f"Video: {os.path.basename(video_path)}\n")
+        f.write(f"Total Scenes: {len(scene_details)}\n\n")
+        
+        for scene in scene_details:
+            f.write(f"Scene {scene['scene_number']}:\n")
+            f.write(f"  Sentence: \"{scene['sentence']}\"\n")
+            f.write(f"  AI Query: \"{scene['ai_query']}\"\n")
+            if scene['fallback_query']:
+                f.write(f"  Fallback Query: \"{scene['fallback_query']}\"\n")
+            f.write(f"  Video Used: {scene['video_used']}\n")
+            f.write(f"  Duration Match: {scene['duration_match_seconds']:.2f}s\n")
+            f.write(f"  {'-'*40}\n\n")
+    
     logger.info(f"  -> Saved metadata: {metadata_path}")
     logger.info(f"  -> Saved script text: {script_path}")
+    logger.info(f"  -> Saved scene mapping: {mapping_path}")
 
 def main(db: Session):
     """Demonstrates a full video composition workflow with a database script."""
