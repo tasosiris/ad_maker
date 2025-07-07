@@ -28,6 +28,7 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY") # Placeholder for future use
+SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 # --- OpenAI Model ---
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")

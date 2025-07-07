@@ -1,76 +1,35 @@
-import asyncio
 import json
-from typing import List
-from openai import OpenAI, AsyncOpenAI
-from src.config import OPENAI_API_KEY, OPENAI_MODEL
+import random
+import os
 
-# Initialize OpenAI client
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY is not set. Please check your .env file.")
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-async def generate_ideas(category: str, n: int = 5) -> List[str]:
+def generate_documentary_idea() -> str:
     """
-    Generates high-paying, low-competition affiliate product ideas using OpenAI.
+    Selects a random documentary idea from the template file.
     """
-    prompt = f"""
-    Generate {n} high-paying, low-competition affiliate product ideas in the "{category}" niche.
-    Your response MUST be a JSON object with a single key "ideas" which contains an array of strings.
-    Each string should be a compelling, specific product idea.
-
-    Example:
-    {{
-      "ideas": [
-        "Self-healing screen protectors for foldable phones",
-        "AI-powered posture correction device for office workers",
-        "Smart hydroponic garden with automated nutrient delivery"
-      ]
-    }}
-    """
-
-    retries = 3
-    for attempt in range(retries):
-        try:
-            print(f"Generating ideas for category: {category} (Attempt {attempt + 1})")
-            response = await client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=1.1, # Higher temperature for more creative ideas
-            )
+    template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'documentary_ideas.json')
+    
+    try:
+        with open(template_path, 'r') as f:
+            ideas = json.load(f)
+        
+        if not ideas:
+            raise ValueError("Idea template file is empty.")
             
-            response_text = response.choices[0].message.content
-            if not response_text:
-                raise ValueError("LLM returned an empty response.")
+        idea = random.choice(ideas)
+        print(f"Selected idea from template: \"{idea}\"")
+        return idea
+        
+    except FileNotFoundError:
+        print(f"Error: Idea template file not found at '{template_path}'.")
+        return "The History of the Internet" # Fallback
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Error processing idea template file: {e}")
+        return "The History of the Internet" # Fallback
 
-            ideas_data = json.loads(response_text)
-            
-            if "ideas" in ideas_data and isinstance(ideas_data["ideas"], list):
-                print("Successfully generated ideas.")
-                return ideas_data["ideas"]
-            else:
-                raise ValueError("LLM returned JSON in an unexpected format.")
-
-        except (json.JSONDecodeError, ValueError, KeyError) as e:
-            print(f"Error processing LLM response: {e}")
-        except Exception as e:
-            print(f"An unexpected error occurred with OpenAI API: {e}")
-
-        if attempt < retries - 1:
-            backoff_time = 2 ** (attempt + 1)
-            print(f"Retrying in {backoff_time} seconds...")
-            await asyncio.sleep(backoff_time)
-
-    # Fallback if all retries fail
-    print("LLM failed to generate ideas after multiple retries. Using fallback.")
-    return [f"Fallback Idea for {category} #{i+1}" for i in range(n)]
-
-async def main():
-    category = "Home Gadgets"
-    ideas = await generate_ideas(category, n=3)
-    print("\n--- Generated Ideas ---")
-    for idea in ideas:
-        print(f"- {idea}")
+def main():
+    idea = generate_documentary_idea()
+    print("\n--- Selected Idea ---")
+    print(f"- {idea}")
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    main() 

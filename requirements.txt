@@ -1,37 +1,26 @@
-# Core Application
 click
-python-dotenv>=1.0.0
-pyyaml>=6.0
-loguru
-jinja2>=3.0.0
-
-# AI & API Services
-openai>=1.0.0
-elevenlabs>=0.2.24
-pexels-api-py>=1.0.0
-sqlalchemy>=2.0.0
-
-# Video & Audio Processing
-ffmpeg-python>=0.2.0
-
-# Development & Testing
-pytest>=7.0.0
-flake8
-black
-bandit
-
-# For testing
-vcrpy
-
-# For linting
-flake8
-black
-
-# For security scanning
-bandit
-
-# Additional dependencies
-pydantic>=2.0.0
-requests>=2.28.0
-pillow>=9.0.0
-numpy>=1.22.0 
+fastapi
+uvicorn
+sqlalchemy
+python-dotenv
+openai
+jinja2
+python-multipart
+requests
+ffmpeg-python
+inputimeout
+elevenlabs
+websockets 
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+requests
+python-dotenv
+instructor
+pydantic 
+google-search-results
+jinja2
+beautifulsoup4
+scipy
+# Add parallax-maker from GitHub
+parallax-maker @ git+https://github.com/provos/parallax-maker.git 

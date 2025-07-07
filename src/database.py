@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
@@ -22,12 +26,8 @@ class Job(Base):
     __tablename__ = "jobs"
     id = Column(Integer, primary_key=True, index=True)
     idea = Column(String, unique=True, index=True)
-    category = Column(String)
-    status = Column(String, default="pending") # e.g., pending, scripting, feedback, approved, rendering, done
-    # Product information
-    product_name = Column(String, nullable=True)
-    product_url = Column(String, nullable=True)
-    affiliate_commission = Column(String, nullable=True)  # e.g., "5-8%"
+    status = Column(String, default="pending") # e.g., pending, researching, scripting, feedback, approved, rendering, done
+    research_summary = Column(Text, nullable=True) # To store research about the documentary subject
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     scripts = relationship("Script", back_populates="job")

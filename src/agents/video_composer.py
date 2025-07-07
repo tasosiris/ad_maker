@@ -6,6 +6,9 @@ from typing import List, Optional, Dict, Any
 import re
 import random
 import json
+import subprocess
+import shutil
+from datetime import datetime
 
 from openai import OpenAI
 from src.config import OPENAI_API_KEY, OPENAI_MODEL
@@ -16,6 +19,12 @@ from src.editing.ffmpeg_editor import compose_video
 from src.database import Script, Job
 from src.utils.output_manager import generate_metadata, save_video_with_metadata
 from sqlalchemy.orm import Session
+from src.agents.prompt_enhancer import enhance_prompt
+from src.agents.image_generator import generate_image
+from src.agents.kling_animator import create_kling_video
+from src.agents.text_overlay import create_video_with_text_overlay
+from src.database import get_db, Job
+from src.utils.file_organizer import FileOrganizer
 
 # Initialize OpenAI client
 if not OPENAI_API_KEY:
@@ -50,66 +59,60 @@ def extract_keywords(text: str, max_keywords: int = 5) -> str:
     # Return the most relevant keywords, joined into a string
     return ' '.join(keywords[:max_keywords])
 
-def generate_intelligent_video_query(text: str, category: str, idea: str) -> str:
+def generate_intelligent_video_query(text: str, subject: str) -> str:
     """
     Uses GPT to intelligently determine what type of video would be most appropriate 
     for the given narration segment, then creates a targeted search query.
     """
     try:
         prompt = f"""
-You are a video content strategist. Given a narration segment from a video script, determine what type of background video would be most visually engaging and appropriate.
+You are a documentary film assistant. Your task is to find the perfect B-roll footage for a specific line of narration.
 
-Narration segment: "{text}"
-Product category: "{category}"
-Overall video idea: "{idea}"
+Overall Documentary Subject: "{subject}"
+Narration Line: "{text}"
 
 Your task:
-1. Analyze the narration to understand what's being communicated
-2. Determine what type of visual would best support this narration
-3. Create a short, specific search query (3-5 words) that would find the perfect background video
+1. Analyze the narration line to understand its core meaning and visual potential.
+2. Think about what visuals would best complement this narration in a documentary context.
+3. Create a short, specific search query (3-5 words) for a stock video website.
 
 Guidelines:
-- For product demonstrations: focus on the product in use
-- For emotional appeals: focus on people, lifestyle, or scenarios
-- For statistics/facts: focus on relevant contexts or environments
-- For problems/solutions: focus on the problem scenario or solution in action
-- Keep it simple and specific - avoid generic terms
+- For historical topics, think about archival footage, maps, or dramatic reenactments.
+- For biographical topics, think about lifestyle shots, interviews, and locations.
+- For scientific topics, think about animations, lab footage, or nature shots.
+- Be specific. Instead of "car", try "vintage 1920s car". Instead of "space", try "nebula animation" or "saturn rings".
 
 Respond with ONLY the search query, nothing else.
 
 Examples:
-- Narration: "Tired of struggling with dull knives that can't even cut a tomato?"
-  Query: "struggling cutting tomato knife"
+- Narration: "In the heart of ancient Rome, gladiators battled for their lives."
+  Query: "Colosseum historical reenactment"
   
-- Narration: "This revolutionary blender changed my morning routine completely"
-  Query: "person making smoothie blender"
+- Narration: "The Great Barrier Reef is home to thousands of species of marine life."
+  Query: "coral reef vibrant fish"
   
-- Narration: "Studies show that 80% of people don't get enough sleep"
-  Query: "tired person bedroom insomnia"
+- Narration: "He trained relentlessly, day and night, for his shot at the championship."
+  Query: "boxer training intense gym"
 
 Your search query:"""
 
         response = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,  # Lower temperature for more consistent results
+            temperature=0.4,  # Lower temperature for more consistent results
             max_tokens=20  # Keep it short
         )
         
-        ai_query = response.choices[0].message.content.strip()
+        ai_query = response.choices[0].message.content.strip().replace('"', '').replace("'", '')
         
-        # Clean up the query and add category for better results
-        ai_query = ai_query.replace('"', '').replace("'", '').strip()
-        final_query = f"{ai_query} {category}"
-        
-        logger.info(f"  -> AI-generated video query: '{final_query}'")
-        return final_query
+        logger.info(f"  -> AI-generated video query: '{ai_query}'")
+        return ai_query
         
     except Exception as e:
         logger.warning(f"Failed to generate AI query: {e}. Falling back to keyword extraction.")
         # Fallback to original method
         keywords = extract_keywords(text)
-        return f"{keywords} {category}" if keywords else f"{idea} {category}"
+        return f"{keywords} {subject}" if keywords else subject
 
 @dataclass
 class TimedVoiceClip:
@@ -226,13 +229,16 @@ def run_video_composition(db: Session, script: Script):
     logger.info("------------------------------------")
     
     logger.info("Step 4: Composing Video with FFmpeg...")
-    timestamp = int(time.time())
-    # Shorten the directory path to avoid filesystem limits
-    safe_category = job.category.replace(' ', '_')[:20]
-    safe_idea = job.idea.replace(' ', '_')[:30]
-    output_dir = f"output/{safe_category}/{safe_idea}/{script.script_type}"
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f"script_{script.id}_{timestamp}.mp4")
+    
+    # Initialize file organizer for stock video composition
+    organizer = FileOrganizer()
+    project_dirs = organizer.create_project_structure(
+        project_name=job.idea,
+        script_type=script.script_type,
+        timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")
+    )
+    
+    output_path = str(project_dirs['temp'] / f"temp_final_video.mp4")
     
     # Extract paths for the editor function
     video_paths = [scene.video_path for scene in scenes]
@@ -265,19 +271,75 @@ def run_video_composition(db: Session, script: Script):
             if output_duration < 1.0:
                 logger.warning(f"Final video is too short ({output_duration:.2f}s)!")
                 job.status = 'render_failed'
-                db.commit()
             else:
-                # Save metadata alongside the video
-                save_video_metadata(job, script, final_video_path, scene_mappings)
+                # Organize assets and save final video
+                logger.info("Step 6: Organizing assets and saving final video...")
                 
+                # Organize video assets that were fetched
+                video_assets = [scene.video_path for scene in scenes if scene.video_path]
+                if video_assets:
+                    # Copy video assets to project structure (they're from stock video cache)
+                    asset_dir = project_dirs['video_clips']
+                    for i, asset_path in enumerate(video_assets):
+                        if os.path.exists(asset_path):
+                            asset_filename = f"stock_video_{i+1:02d}_{os.path.basename(asset_path)}"
+                            new_asset_path = asset_dir / asset_filename
+                            try:
+                                shutil.copy2(asset_path, new_asset_path)
+                                logger.info(f"Organized stock video: {asset_filename}")
+                            except Exception as e:
+                                logger.warning(f"Failed to organize stock video {asset_path}: {e}")
+                
+                # Organize audio files
+                audio_paths = [scene.voice_clip.audio_path for scene in scenes]
+                voice_clips = [scene.voice_clip for scene in scenes]
+                organized_audio_paths = organizer.organize_audio_files(audio_paths, project_dirs, voice_clips)
+                
+                # Save final video with organized structure
+                organized_final_path = organizer.save_final_video(final_video_path, project_dirs, job.idea, script.script_type)
+                
+                # Create comprehensive metadata
+                metadata = {
+                    "video_info": {
+                        "title": job.idea.replace('_', ' ').title(),
+                        "script_type": script.script_type,
+                        "generation_method": "stock_video_composition"
+                    },
+                    "script_content": {
+                        "full_script": str(script.content or ''),
+                        "script_id": script.id,
+                        "job_id": job.id
+                    },
+                    "generation_info": {
+                        "idea": job.idea,
+                        "research_summary": job.research_summary,
+                        "created_at": str(job.created_at),
+                        "total_scenes": len(scenes),
+                        "video_duration": output_duration
+                    },
+                    "scene_mappings": [m.__dict__ for m in scene_mappings],
+                    "assets_info": {
+                        "stock_videos_used": len(video_assets),
+                        "audio_clips": len(organized_audio_paths),
+                        "background_music": background_music is not None
+                    }
+                }
+                
+                # Save project metadata
+                organizer.save_project_metadata(project_dirs, metadata, job.idea, script.script_type)
+                
+                # Clean up temporary files
+                organizer.cleanup_temp_files(project_dirs)
+                
+                job.video_path = organized_final_path
                 job.status = 'done'
-                db.commit()
                 logger.info(f"===== Finished Video Composition for: {job.idea} =====")
-                logger.info(f"Final video saved to: {final_video_path}")
-                logger.info(f"Metadata saved to: {final_video_path.replace('.mp4', '.json')}")
+                logger.info(f"Final video saved at: {organized_final_path}")
+                logger.info(f"📁 Project organized at: {project_dirs['project_root']}")
         except Exception as e:
-            logger.error(f"Failed to probe final video: {e}")
+            logger.error(f"Failed to process final video: {e}")
             job.status = 'render_failed'
+        finally:
             db.commit()
     else:
         job.status = 'render_failed'
@@ -286,12 +348,13 @@ def run_video_composition(db: Session, script: Script):
 
 def fetch_relevant_clip(timed_clip: TimedVoiceClip, job: Job) -> tuple[Optional[str], SceneMapping]:
     """
-    Fetches a video clip relevant to the sentence text using AI-powered query generation.
-    Returns both the video path and detailed mapping information.
+    Fetches the most relevant video clip for a sentence and returns its path and mapping info.
     """
-    # Use AI to generate an intelligent search query
-    query = generate_intelligent_video_query(timed_clip.text, job.category, job.idea)
+    query = generate_intelligent_video_query(timed_clip.text, subject=job.idea)
     
+    # Try to find a video that's slightly longer than the audio
+    target_duration = timed_clip.duration
+
     video_assets = fetch_clips(query, num_clips=5)
     
     fallback_query = None
@@ -299,7 +362,7 @@ def fetch_relevant_clip(timed_clip: TimedVoiceClip, job: Job) -> tuple[Optional[
         logger.warning(f"No initial video assets found. Trying a broader search...")
         # Try with just keywords as fallback
         keywords = extract_keywords(timed_clip.text)
-        fallback_query = f"{keywords} {job.category}" if keywords else f"{job.idea} {job.category}"
+        fallback_query = f"{keywords} {job.idea}" if keywords else f"{job.idea}"
         logger.info(f"  -> Fallback query: '{fallback_query}'")
         video_assets = fetch_clips(fallback_query, num_clips=5)
 
@@ -360,9 +423,7 @@ def save_video_metadata(job: Job, script: Script, video_path: str, scene_mapping
     """
     Saves comprehensive metadata alongside the video file, including:
     - Script content
-    - Product information
-    - Affiliate details
-    - Video metadata
+    - Research summary
     - Detailed scene mappings (queries and videos used)
     """
     # Generate a clean title from the job idea
@@ -370,87 +431,24 @@ def save_video_metadata(job: Job, script: Script, video_path: str, scene_mapping
     if len(title) > 100:  # YouTube title limit
         title = title[:97] + "..."
     
-    # Create description with script content
     script_content = str(script.content or '')
-    description_parts = []
-    
-    if script_content:
-        # Extract first few sentences for description
-        sentences = script_content.split('.')[:3]  # First 3 sentences
-        short_description = '. '.join(sentences).strip()
-        if short_description and not short_description.endswith('.'):
-            short_description += '.'
-        description_parts.append(short_description)
-    
-    if job.product_name:
-        description_parts.append(f"\n🛍️ Featured Product: {job.product_name}")
-        if job.product_url:
-            description_parts.append(f"🔗 Product Link: {job.product_url}")
-        if job.affiliate_commission:
-            description_parts.append(f"💰 Affiliate Commission: {job.affiliate_commission}")
-    
-    description = '\n'.join(description_parts)
-    
-    # Generate tags from the idea and category
-    tags = []
-    if job.category:
-        tags.extend(job.category.lower().replace('_', ' ').split())
-    if job.product_name:
-        # Extract meaningful words from product name
-        product_words = [word.lower() for word in job.product_name.split() 
-                        if len(word) > 2 and word.lower() not in COMMON_WORDS]
-        tags.extend(product_words[:3])  # Limit to avoid too many tags
-    
-    # Add general tags
-    tags.extend(['review', 'affiliate', 'product'])
-    tags = list(set(tags))[:10]  # Remove duplicates and limit to 10 tags
-    
-    # Prepare affiliate links
-    affiliate_links = {}
-    if job.product_name and job.product_url:
-        affiliate_links[job.product_name] = job.product_url
-    
-    # Convert scene mappings to serializable format
-    scene_details = []
-    for i, mapping in enumerate(scene_mappings):
-        scene_details.append({
-            "scene_number": i + 1,
-            "sentence": mapping.sentence,
-            "ai_query": mapping.query_used,
-            "fallback_query": mapping.fallback_query,
-            "video_used": mapping.video_filename,
-            "video_path": mapping.video_path,
-            "duration_match_seconds": mapping.duration_match
-        })
     
     # Generate comprehensive metadata
     metadata = {
         "video_info": {
             "title": title,
-            "description": description,
-            "tags": tags,
-            "category": job.category,
-            "script_type": script.script_type,
-            "duration_seconds": None  # Will be filled if needed
+            "script_type": script.script_type
         },
         "script_content": {
             "full_script": script_content,
-            "script_id": script.id,
-            "job_id": job.id
+            "script_id": script.id
         },
-        "product_info": {
-            "name": job.product_name,
-            "url": job.product_url,
-            "affiliate_commission": job.affiliate_commission
-        },
-        "affiliate_links": affiliate_links,
         "generation_info": {
             "idea": job.idea,
-            "category": job.category,
-            "created_at": str(job.created_at),
-            "script_status": script.status
+            "research_summary": job.research_summary,
+            "created_at": str(job.created_at)
         },
-        "scene_mappings": scene_details
+        "scene_mappings": [m.__dict__ for m in scene_mappings]
     }
     
     # Save metadata to JSON file
@@ -461,39 +459,16 @@ def save_video_metadata(job: Job, script: Script, video_path: str, scene_mapping
     # Also save a simple text file with just the script for easy reading
     script_path = video_path.replace('.mp4', '_script.txt')
     with open(script_path, 'w', encoding='utf-8') as f:
+        f.write(f"--- DOCUMENTARY SCRIPT ---\n\n")
         f.write(f"TITLE: {title}\n")
-        f.write(f"CATEGORY: {job.category}\n")
-        f.write(f"IDEA: {job.idea}\n")
-        if job.product_name:
-            f.write(f"PRODUCT: {job.product_name}\n")
-            f.write(f"COMMISSION: {job.affiliate_commission}\n")
-            f.write(f"LINK: {job.product_url}\n")
-        f.write(f"\n{'='*50}\n")
-        f.write(f"SCRIPT CONTENT:\n")
+        f.write(f"IDEA: {job.idea}\n\n")
+        f.write(f"{'='*50}\n")
+        f.write(f"SCRIPT CONTENT (SENT TO TTS):\n")
         f.write(f"{'='*50}\n\n")
         f.write(script_content)
-    
-    # Save detailed scene mapping as a separate readable file
-    mapping_path = video_path.replace('.mp4', '_scene_mapping.txt')
-    with open(mapping_path, 'w', encoding='utf-8') as f:
-        f.write(f"SCENE MAPPING REPORT\n")
-        f.write(f"{'='*50}\n\n")
-        f.write(f"Video: {os.path.basename(video_path)}\n")
-        f.write(f"Total Scenes: {len(scene_details)}\n\n")
-        
-        for scene in scene_details:
-            f.write(f"Scene {scene['scene_number']}:\n")
-            f.write(f"  Sentence: \"{scene['sentence']}\"\n")
-            f.write(f"  AI Query: \"{scene['ai_query']}\"\n")
-            if scene['fallback_query']:
-                f.write(f"  Fallback Query: \"{scene['fallback_query']}\"\n")
-            f.write(f"  Video Used: {scene['video_used']}\n")
-            f.write(f"  Duration Match: {scene['duration_match_seconds']:.2f}s\n")
-            f.write(f"  {'-'*40}\n\n")
-    
+
     logger.info(f"  -> Saved metadata: {metadata_path}")
     logger.info(f"  -> Saved script text: {script_path}")
-    logger.info(f"  -> Saved scene mapping: {mapping_path}")
 
 def main(db: Session):
     """Demonstrates a full video composition workflow with a database script."""
@@ -525,10 +500,195 @@ def main(db: Session):
     run_video_composition(db, approved_script)
     
 
+def compose_video_from_images(job_id: int):
+    """
+    Main function to compose the video from generated images.
+    Orchestrates the video creation process from script to final video.
+    """
+    db = next(get_db())
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        logger.error(f"Job with id {job_id} not found.")
+        return
+
+    script = next((s for s in job.scripts if s.status == 'approved'), None)
+    if not script:
+        logger.error(f"No approved script found for job {job_id}")
+        return
+
+    logger.info(f"===== Starting Image-Based Video Composition for Job ID: {job.id} (Idea: {job.idea}) =====")
+    job.status = 'rendering_images'
+    db.commit()
+
+    # Initialize file organizer
+    organizer = FileOrganizer()
+    project_dirs = organizer.create_project_structure(
+        project_name=job.idea,
+        script_type=script.script_type,
+        timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")
+    )
+
+    # 1. Generate Voiceover from the script content
+    logger.info("Step 1: Generating Voiceover...")
+    script_content = str(script.content or '')
+    voice_clips = generate_voice(script_id=script.id, text=script_content)
+    if not voice_clips:
+        logger.error(f"Voiceover generation failed for script {script.id}. Aborting.")
+        job.status = 'render_failed'
+        db.commit()
+        return
+    logger.info(f"Generated {len(voice_clips)} audio clips from script sentences.")
+
+    # Organize audio files
+    audio_paths = [clip.audio_path for clip in voice_clips]
+    organized_audio_paths = organizer.organize_audio_files(audio_paths, project_dirs, voice_clips)
+    
+    generated_images = []
+    video_clips = []
+    
+    for i, clip in enumerate(voice_clips):
+        logger.info(f"\n--- Processing scene {i+1}/{len(voice_clips)} ---")
+        logger.info(f"Phrase: {clip.text}")
+
+        # Step 2: Enhance prompt
+        logger.info("Step 2: Enhancing prompt...")
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        enhanced_prompt = enhance_prompt(clip.text, client)
+        
+        # Step 3: Generate image
+        logger.info(f"Step 3: Generating image for prompt: '{enhanced_prompt[:50]}...'")
+        generated_image_path = generate_image(enhanced_prompt)
+
+        if not generated_image_path:
+            logger.error("Image generation failed. Skipping this scene.")
+            continue
+            
+        generated_images.append(generated_image_path)
+        
+        # 4. Create animated video using Kling AI
+        logger.info("Step 4: Creating animated video clip using Kling AI...")
+        clip_output_path = str(project_dirs['temp'] / f"scene_{i}.mp4")
+        
+        try:
+            success = create_kling_video(
+                image_path=generated_image_path,
+                audio_path=clip.audio_path,
+                output_path=clip_output_path,
+                original_prompt=enhanced_prompt,
+                voice_text=clip.text,
+                model_type="standard"  # Use "pro" for higher quality but higher cost
+            )
+            
+            if success:
+                # 5. Add intelligent text overlay to the video
+                logger.info("Step 5: Adding intelligent text overlay...")
+                overlay_output_path = str(project_dirs['temp'] / f"scene_{i}_with_text.mp4")
+                
+                # Get video duration from the audio clip
+                try:
+                    import ffmpeg
+                    audio_info = ffmpeg.probe(clip.audio_path)
+                    duration = float(audio_info['format']['duration'])
+                except Exception as e:
+                    logger.warning(f"Could not determine audio duration: {e}. Using default 5 seconds.")
+                    duration = 5.0
+                
+                # Add text overlay if appropriate
+                overlay_success = create_video_with_text_overlay(
+                    video_path=clip_output_path,
+                    voice_text=clip.text,
+                    enhanced_prompt=enhanced_prompt,
+                    duration=duration,
+                    output_path=overlay_output_path
+                )
+                
+                if overlay_success:
+                    video_clips.append(overlay_output_path)
+                    logger.info(f"Successfully created video with text overlay: {overlay_output_path}")
+                else:
+                    # Fallback to original video if text overlay fails
+                    video_clips.append(clip_output_path)
+                    logger.info(f"Using original Kling AI video: {clip_output_path}")
+            else:
+                logger.error(f"Kling AI video generation failed for scene {i}")
+        except Exception as e:
+            logger.error(f"Failed to create Kling AI video for {generated_image_path}: {e}")
+
+    if not video_clips:
+        logger.error("No video clips were created. Aborting.")
+        job.status = 'render_failed'
+        db.commit()
+        return
+
+    # Organize generated images
+    logger.info("Step 5.1: Organizing generated images...")
+    organized_image_paths = organizer.organize_generated_images(generated_images, project_dirs, voice_clips)
+
+    # Organize video clips
+    logger.info("Step 5.2: Organizing video clips...")
+    organized_video_clips = organizer.organize_video_clips(video_clips, project_dirs, voice_clips)
+
+    # 6. Combine all video clips into one
+    logger.info("\nStep 6: Combining all video clips into final video...")
+    temp_final_path = str(project_dirs['temp'] / "temp_final_video.mp4")
+    
+    # Use the organized audio paths that correspond to successful video clips
+    successful_audio_paths = [organized_audio_paths[i] for i in range(len(organized_video_clips))]
+
+    final_video = compose_video(organized_video_clips, successful_audio_paths, temp_final_path)
+
+    if final_video and os.path.exists(final_video):
+        # Save final video with organized structure
+        logger.info("Step 7: Saving final video with organized structure...")
+        final_video_path = organizer.save_final_video(final_video, project_dirs, job.idea, script.script_type)
+        
+        # Create comprehensive metadata
+        metadata = {
+            "video_info": {
+                "title": job.idea.replace('_', ' ').title(),
+                "script_type": script.script_type,
+                "generation_method": "kling_ai_animation"
+            },
+            "script_content": {
+                "full_script": script_content,
+                "script_id": script.id,
+                "job_id": job.id
+            },
+            "generation_info": {
+                "idea": job.idea,
+                "research_summary": job.research_summary,
+                "created_at": str(job.created_at),
+                "total_scenes": len(voice_clips),
+                "successful_scenes": len(organized_video_clips)
+            },
+            "assets_info": {
+                "images_generated": len(organized_image_paths),
+                "audio_clips": len(organized_audio_paths),
+                "video_clips": len(organized_video_clips)
+            }
+        }
+        
+        # Save project metadata
+        organizer.save_project_metadata(project_dirs, metadata, job.idea, script.script_type)
+        
+        # Clean up temporary files
+        organizer.cleanup_temp_files(project_dirs)
+        
+        job.video_path = final_video_path
+        job.status = 'done'
+        db.commit()
+        logger.info(f"\n✅ Video composition complete! Final video saved at: {final_video_path}")
+        logger.info(f"📁 Project organized at: {project_dirs['project_root']}")
+    else:
+        job.status = 'render_failed'
+        db.commit()
+        logger.error("Failed to compose the final video.")
+
+
 if __name__ == "__main__":
-    from src.database import get_db
-    db_session = next(get_db())
-    try:
-        main(db_session)
-    finally:
-        db_session.close() 
+    import sys
+    if len(sys.argv) > 1:
+        job_id = int(sys.argv[1])
+        compose_video_from_images(job_id)
+    else:
+        print("Please provide a job ID.") 

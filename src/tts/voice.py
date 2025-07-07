@@ -21,6 +21,8 @@ class VoiceClip:
 
 def _clean_text_for_tts(text: str) -> str:
     """Removes non-spoken artifacts from the script text."""
+    # Replace [PAUSE] with a period to create a natural pause.
+    text = text.replace("[PAUSE]", ".")
     # Remove bracketed tags like [HOOK], [TITLE], etc.
     text = re.sub(r'\[.*?\]', '', text)
     # Remove markdown like **...** but keep the text
@@ -33,7 +35,7 @@ def _clean_text_for_tts(text: str) -> str:
     
     # Remove speaker cues (e.g., "NARRATOR (V.O.)", "JOHN:")
     # This will remove the cue if it's on its own line or at the start of a line of dialogue.
-    text = re.sub(r"^\s*([A-Za-z\s'’.-]+)(\s*\(.*?\))?:?", '', text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*([A-Za-z\s'’.-]+)(\s*\(.*?\))?:\s*,?", '', text, flags=re.MULTILINE)
 
     # Strip leading/trailing whitespace from each line and remove empty lines
     lines = [line.strip() for line in text.split('\n')]
@@ -42,22 +44,32 @@ def _clean_text_for_tts(text: str) -> str:
     return cleaned_text
 
 def split_script_into_sentences(text: str) -> List[str]:
-    """Splits a script into a list of sentences, handling both newlines and punctuation."""
+    """Splits a script into a list of sentences, respecting newlines as deliberate breaks."""
     if not text:
         return []
-    
-    all_sentences = []
-    # First, split the text into lines/paragraphs
-    lines = text.split('\n')
-    
-    for line in lines:
-        if not line.strip():
+
+    sentences = []
+    # First, split the text into chunks based on newlines.
+    # Each chunk is a paragraph or a deliberately separated line.
+    chunks = text.split('\n')
+
+    for chunk in chunks:
+        chunk = chunk.strip()
+        if not chunk:
             continue
-        # Then, split each line by sentence-ending punctuation
-        sentences = re.split(r'(?<=[.?!])\s+', line)
-        all_sentences.extend([s.strip() for s in sentences if s.strip()])
         
-    return [s for s in all_sentences if len(s) > 1]
+        # Split each chunk by sentence-ending punctuation.
+        # The regex looks for a punctuation mark (.?!) and keeps it with the sentence.
+        sub_sentences = re.split(r'(?<=[.?!])\s+', chunk)
+        
+        for s in sub_sentences:
+            # Clean up each sub-sentence.
+            clean_s = s.strip()
+            if clean_s:
+                sentences.append(clean_s)
+    
+    # Final filter for any very short or empty strings that might have slipped through.
+    return [s for s in sentences if len(s) > 1]
 
 def generate_voice(script_id: int, text: any) -> List[VoiceClip]:
     """

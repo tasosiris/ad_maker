@@ -1,187 +1,141 @@
-# AI-Powered Video Generation Pipeline
+# AI Documentary Generation Pipeline (V2)
 
-This document explains the entire pipeline of the AI-powered video generation system, from the initial idea to the final rendered video. The process is designed to be interactive, allowing for user feedback at crucial stages.
+This document provides a detailed, code-level explanation of the AI-powered documentary generation pipeline. It reflects the current architecture, which has evolved from ad generation to creating short-form and long-form documentaries using a sophisticated multi-agent system.
 
 ## High-Level Overview
 
-The pipeline can be broken down into the following major steps:
+The pipeline is a sequential, yet modular, process that transforms a single concept into a fully-produced video. It is orchestrated by a central Python script and leverages a database to manage state between different stages.
 
-1.  **Idea Generation**: Based on a user-selected category, several ad ideas are generated.
-2.  **Idea Selection**: The user selects the most promising idea.
-3.  **Product Search**: The system finds real products related to the selected idea.
-4.  **Product Selection**: The user selects a product to be featured in the ad.
-5.  **Script Generation**: A script (either long-form or short-form) is generated for the ad.
-6.  **Feedback and Approval**: The user reviews the script and can approve it for production or request changes.
-7.  **Video Composition**: Once a script is approved, the system generates the final video by combining text-to-speech audio with visual assets.
+The major steps are:
 
-Below is a detailed breakdown of each step.
+1.  **Idea Generation**: The pipeline begins by selecting a random documentary topic from a predefined list.
+2.  **AI-Powered Research**: A research agent uses a Large Language Model (LLM) to gather detailed, factual information about the chosen topic.
+3.  **Database Job Creation**: A "job" is created in a database to track the entire lifecycle of the video, from scripting to rendering.
+4.  **AI-Powered Scriptwriting**: A scriptwriting agent, guided by a high-quality example transcript, transforms the research summary into a theatrical and engaging narrative. The user can choose between long or short-form scripts.
+5.  **Interactive Feedback Loop**: The generated script is presented to the user for review. The user can approve the script for production or request revisions.
+6.  **Automated Video Composition**: Once approved, the video composer agent takes over. This is a multi-step process that involves:
+    *   **Text-to-Speech (TTS)**: Generating a realistic voiceover for the script.
+    *   **AI Image Generation**: Creating custom visual assets (images) for each sentence of the script.
+    *   **Parallax Motion**: Turning static images into dynamic video clips with subtle motion effects.
+    *   **Final Editing**: Assembling the voiceover, visual clips, and background music into a final video file.
 
 ---
 
-## Step-by-Step Breakdown
+## Detailed Step-by-Step Breakdown
 
-### 1. Select Product Category
+### 1. The Orchestrator: `main.py`
 
-*   **Description**: The pipeline starts with the user selecting a category for the product they want to advertise. This helps focus the creative process.
-*   **Script(s) Involved**: `main.py`, `src/agents/idea_selector.py`
-*   **Input**: User's choice from a predefined list of categories (e.g., "Skincare", "Kitchen Gadgets", "Pet Accessories").
-*   **Output**: The selected category name.
-*   **Example**: The user is presented with a list and selects "Kitchen Gadgets".
+The entire process is coordinated by `main.py`, which uses the `click` library to provide a command-line interface (CLI). The main command, `run_full_pipeline`, executes the entire sequence.
 
-### 2. Generate Ad Ideas
+-   **Entry Point**: `run_full_pipeline` function.
+-   **Responsibilities**:
+    -   Calls each agent/module in the correct order.
+    -   Handles database sessions (`get_db`).
+    -   Manages the overall state of the pipeline run.
+    -   Provides a command (`setup_database`) to initialize the database schema.
+    -   Provides a utility command (`organize_files`) to clean up the output directory.
 
-*   **Description**: The system generates a set of creative and engaging ad ideas based on the selected category.
-*   **Script(s) Involved**: `main.py`, `src/agents/idea_generator.py`
-*   **Input**: The product category (e.g., "Kitchen Gadgets").
-*   **Output**: A list of short, compelling ad concepts.
-*   **Example Output**:
-    1.  "A series of quick cuts showing a revolutionary new blender making smoothies, soups, and nut butters effortlessly."
-    2.  "A funny ad showing someone struggling with old, dull knives, then discovering a self-sharpening knife block."
-    3.  "A heartwarming story of a family cooking together using a new smart oven."
+### 2. The Backbone: The Database (`src/database.py`)
 
-### 3. Select an Idea
+The pipeline relies on a database (configurable as SQLite or PostgreSQL) to persist state and manage data. SQLAlchemy is used as the Object-Relational Mapper (ORM).
 
-*   **Description**: The user reviews the generated ideas and selects the one they like the most.
-*   **Script(s) Involved**: `main.py`
-*   **Input**: The list of generated ad ideas.
-*   **Output**: The single, chosen ad idea.
-*   **Example**: The user chooses idea #2: "A funny ad showing someone struggling with old, dull knives, then discovering a self-sharpening knife block."
+-   **Key Models**:
+    -   `Job`: Represents a single documentary project. It tracks the `idea`, the current `status` (e.g., `scripting`, `approved`, `rendering`), and the `research_summary`.
+    -   `Script`: Each `Job` can have multiple scripts. This table stores the script `content`, its `script_type` (`long_form` or `short_form`), and its individual `status` (`pending`, `approved`).
+    -   `Feedback`: Stores the user's decision (`approved` or `revised`) and any textual `notes` for a specific script.
 
-### 4. Find Real Products
+This relational structure ensures that all data related to a single video project is organized and interconnected.
 
-*   **Description**: To make the ad more concrete, the system searches for real products that match the selected idea and category. The system performs a **Google search** using a query like "top affiliate products for [idea] in [category]" and extracts product names and URLs from the search results.
-*   **Script(s) Involved**: `main.py`, `src/agents/product_finder.py`
-*   **Input**: The selected ad idea and category.
-*   **Output**: A list of real products with their names and URLs scraped from Google search results.
-*   **How it works**: 
-    1. Creates a search query: `"top affiliate products for [idea] in [category]"`
-    2. Sends a request to Google Search with proper headers to avoid blocking
-    3. Parses the HTML response using BeautifulSoup
-    4. Extracts product titles from `<h3>` tags in search results
-    5. Filters out irrelevant results and gets associated URLs
-*   **Example Search Query**: `"top affiliate products for A funny ad showing someone struggling with old, dull knives, then discovering a self-sharpening knife block in Kitchen Gadgets"`
-*   **Example Output**:
-    1.  `{ 'name': 'Calphalon Classic Self-Sharpening 15-piece Knife Block Set', 'url': 'https://...' }`
-    2.  `{ 'name': 'Henckels Graphite 14-pc. Self-Sharpening Block Set', 'url': 'https://...' }`
+### 3. Step 1: Idea Generation (`src/agents/idea_generator.py`)
 
-### 5. Select a Product
+The pipeline kicks off by generating an idea.
 
-*   **Description**: The user can select a specific product to be featured in the ad. This step is optional.
-*   **Script(s) Involved**: `main.py`
-*   **Input**: The list of found products.
-*   **Output**: The chosen product, or a decision to proceed with a generic script.
-*   **Example**: User selects the "Calphalon Classic" knife set.
-
-### 6. Generate Script
-
-*   **Description**: A detailed script is generated based on the selected idea and product. The user can choose between a `long_form` (e.g., for YouTube) or `short_form` (e.g., for TikTok/Shorts) script. The script includes scenes, narration, and visual cues.
-*   **Script(s) Involved**: `main.py`, `src/agents/script_generator.py`, `src/templates/`
-*   **Input**: The selected ad idea, chosen product (optional), and desired script format (`long` or `short`).
-*   **Output**: A complete script object.
-*   **Example Snippet (Short Form Vlog-Style)**:
+-   **Function**: `generate_documentary_idea()`
+-   **Process**:
+    1.  It reads a list of predefined topics from `src/templates/documentary_ideas.json`.
+    2.  It uses Python's `random.choice()` to select a single idea from the list.
+    3.  A fallback idea ("The History of the Internet") is used if the JSON file is missing or invalid.
+-   **Example Ideas Source (`documentary_ideas.json`):**
     ```json
-    {
-      "title": "The Knife Set That Actually Changed My Kitchen Game",
-      "scenes": [
-        {
-          "scene_number": 1,
-          "narration": "So, I've been using the Calphalon Self-Sharpening Knife Set for about a month now, and I have to say, I'm seriously impressed. I used to HATE prepping veggies because my old knives were so dull.",
-          "visual_cue": "Vlogger-style shot of a person talking directly to the camera in their kitchen, holding a chef's knife."
-        },
-        {
-          "scene_number": 2,
-          "narration": "But check this out. Every time you pull a knife out of this block, it gets sharpened. Last night, I was making a stir-fry, and chopping everything was so... satisfying. It just glides right through.",
-          "visual_cue": "Close-up shot of a tomato being sliced effortlessly. Quick cuts of various vegetables being prepped."
-        },
-        {
-          "scene_number": 3,
-          "narration": "If you're tired of struggling with dull knives, you've got to check this out. I'll drop a link in the description.",
-          "visual_cue": "The vlogger gives a thumbs-up to the camera, with the knife block visible in the background."
-        }
-      ]
-    }
+    [
+        "The Rise and Fall of the Concorde Supersonic Jet",
+        "A Day in the Life of a Storm Chaser",
+        "The Forgotten Story of the First Female Computer Programmer",
+        ...
+    ]
     ```
 
-### 7. Review & Approve Script
+### 4. Step 2: AI-Powered Research (`src/agents/researcher.py`)
 
-*   **Description**: The user is shown a summary of the generated script and can provide feedback. They can approve the script for video production, ask for modifications, or reject it.
-*   **Script(s) Involved**: `main.py`, `src/controllers/feedback.py`
-*   **Input**: The generated script. User's feedback (approve/reject).
-*   **Output**: An approved script, ready for video composition.
-*   **Example**: The user sees the script summary and types "approve".
+Once an idea is selected, it's passed to the research agent to gather source material.
 
-### 8. Compose Video
+-   **Function**: `async research_subject(subject: str)`
+-   **Process**:
+    1.  **Prompt Engineering**: It constructs a detailed prompt that instructs an OpenAI model (e.g., GPT-4) to act as a "world-class researcher."
+    2.  **Specific Instructions**: The prompt explicitly asks for key historical events, figures, interesting facts, and the subject's lasting legacy, ensuring a comprehensive summary.
+    3.  **API Call**: It makes an `async` call to the OpenAI Chat Completions API.
+    4.  **Output**: It returns a detailed, well-organized text summary that serves as the factual foundation for the script.
 
-*   **Description**: This is the final and most complex stage. Once a script is approved, the system automatically creates the video.
-*   **Script(s) Involved**: `src/agents/video_composer.py`
-*   **This stage involves several sub-steps**:
-    1.  **Text-to-Speech (TTS)**: The narration from the script is converted into a realistic voiceover.
-        *   **Script**: `src/tts/voice.py`
-        *   **Input**: The narration text for each scene.
-        *   **Output**: Audio files (`.mp3`) for each line of narration.
-    2.  **Fetch Visual Assets**: The system searches for and downloads stock videos or images that match the `visual_cue` for each scene.
-        *   **Script**: `src/assets/fetcher.py`
-        *   **Input**: The `visual_cue` text (e.g., "A hand smoothly pulls out a chef's knife").
-        *   **Output**: Video clips (`.mp4`) or images for each scene.
-    3.  **Video Editing**: The downloaded visual assets are edited together. The audio voiceover is synchronized with the corresponding video clips, and background music or subtitles can be added.
-        *   **Script**: `src/editing/ffmpeg_editor.py`
-        *   **Input**: The audio files and visual asset files.
-        *   **Output**: The final, composed video ad (`.mp4`).
-*   **Final Output**: A complete video file saved in the `output/` directory, along with comprehensive metadata files.
+### 5. Step 3: Script Generation (`src/agents/script_generator.py`)
+
+This agent transforms the factual research into a compelling narrative.
+
+-   **Function**: `async generate_single_script(...)`
+-   **Process**:
+    1.  **Style Guidance (One-Shot Prompting)**: The agent first loads an example transcript from `src/templates/example_transcript.txt`. This provides the AI with a concrete example of the desired theatrical tone, emotional depth, and narrative pacing.
+    2.  **Advanced Prompt Engineering**: It uses a sophisticated system prompt that defines the AI's persona ("world-class documentary scriptwriter") and provides a strict set of rules:
+        -   Write in a dramatic, emotionally resonant style.
+        -   Build a narrative arc with a strong hook.
+        -   Use `[PAUSE]` markers for dramatic effect.
+        -   Adhere to specific word counts for `long_form` and `short_form` videos.
+        -   Focus *only* on the narrative text, excluding visual cues.
+    3.  **Creative API Call**: The `temperature` parameter is set to `0.7` to encourage more creative and less deterministic output from the AI.
+    4.  **Database Integration**: The generated script content is saved as a new `Script` record in the database, linked to the parent `Job`. The job's status is then updated to `feedback`.
+
+### 6. Step 4: Interactive Feedback Loop (`src/controllers/feedback.py`)
+
+This controller acts as a crucial quality gate, ensuring user approval before production.
+
+-   **Function**: `collect_feedback(db: Session, script: Script)`
+-   **Process**:
+    1.  **Display Summary**: It first calls `display_script_summary()` to show the user a brief excerpt of the script.
+    2.  **Timed Input**: It uses `inputimeout` to prompt the user for an action: `approve`, `revise`, or `quit`. It defaults to `approve` after 3 seconds, allowing for unattended runs.
+    3.  **`approve`**: Updates the script status to `approved`. If all scripts for the job are approved, the job's master status is also set to `approved`, unlocking the final video composition stage.
+    4.  **`revise`**: Prompts the user for notes, saves them to the `Feedback` table, and sets the script status to `revision_needed`.
+    5.  **`quit`**: Halts the process.
+
+### 7. Step 5: Video Composition (`src/agents/video_composer.py`)
+
+This is the final, multi-stage assembly line where the video is created. The master function `compose_video_from_images` orchestrates the following sub-processes for an approved job.
+
+#### 7.1. Text-to-Speech (`src/tts/voice.py`)
+
+-   **Function**: `generate_voice()`
+-   **Process**: The script text is split into sentences. Each sentence (and any `[PAUSE]` marker) is converted into an individual `.mp3` audio file using a TTS service. This segmentation is vital for synchronizing visuals.
+
+#### 7.2. AI Image Generation (`src/agents/image_generator.py`)
+
+-   **Function**: `generate_image()`
+-   **Process**: For each sentence of narration, a unique visual is created.
+    1.  **Prompt Enhancement (`src/agents/prompt_enhancer.py`)**: The raw sentence is first sent to the `enhance_prompt` function. This utility uses an LLM to embellish the simple sentence into a rich, descriptive prompt optimized for an image generation model (e.g., transforming "The car was fast" into "cinematic shot of a vintage red sports car blurring down a coastal highway at sunset, photorealistic, high-speed motion").
+    2.  **Image Creation**: The enhanced prompt is then used to generate a high-resolution image via an AI image service like DALL-E.
+
+#### 7.3. Creating Motion (`src/editing/parallax.py`)
+
+-   **Function**: `create_parallax_video()`
+-   **Process**: To avoid static, boring visuals, each generated image is converted into a short video clip. This function applies a "Ken Burns" effect—a slow, subtle pan and zoom—that gives the image a sense of motion and depth. The duration of each parallax clip is timed to match its corresponding voiceover sentence.
+
+#### 7.4. Final Assembly (`src/editing/ffmpeg_editor.py`)
+
+-   **Function**: `compose_video()`
+-   **Process**: The `ffmpeg_editor` is the final assembler. It uses the powerful `ffmpeg` command-line tool to:
+    1.  Concatenate all the parallax video clips in the correct order.
+    2.  Overlay the corresponding voiceover clip for each scene, ensuring perfect synchronization.
+    3.  Randomly select a background music track from `src/assets/music`.
+    4.  Mix the background music into the final audio track at a lower volume.
+    5.  Encode and render the final `.mp4` video file.
+    6.  Save the video and a comprehensive metadata JSON file into a neatly organized folder structure within the `output/` directory.
 
 ---
 
-## Output Files
-
-When a video is successfully generated, the system creates multiple files in the output directory:
-
-### File Structure
-```
-output/
-├── [Category]/
-│   └── [Idea]/
-│       └── [script_type]/
-│           ├── script_[ID]_[timestamp].mp4     # The final video
-│           ├── script_[ID]_[timestamp].json    # Comprehensive metadata
-│           └── script_[ID]_[timestamp]_script.txt  # Human-readable script
-```
-
-### 1. Video File (`.mp4`)
-The main video output with synchronized audio and visuals.
-
-### 2. Metadata File (`.json`)
-Contains comprehensive information about the video:
-```json
-{
-  "video_info": {
-    "title": "Smart Kitchen Knife Block Review",
-    "description": "Tired of dull knives that can't even cut a tomato?...",
-    "tags": ["kitchen", "gadgets", "knife", "review", "affiliate"],
-    "category": "Kitchen_Gadgets",
-    "script_type": "short_form"
-  },
-  "script_content": {
-    "full_script": "Complete script text here...",
-    "script_id": 123,
-    "job_id": 45
-  },
-  "product_info": {
-    "name": "Calphalon Classic Self-Sharpening 15-piece Knife Block Set",
-    "url": "https://amazon.com/product-link",
-    "affiliate_commission": "3-8%"
-  },
-  "affiliate_links": {
-    "Calphalon Classic Self-Sharpening 15-piece Knife Block Set": "https://amazon.com/product-link"
-  },
-  "generation_info": {
-    "idea": "A funny ad showing someone struggling with old, dull knives...",
-    "category": "Kitchen_Gadgets",
-    "created_at": "2024-01-15 10:30:00",
-    "script_status": "approved"
-  }
-}
-```
-
-### 3. Script Text File (`.txt`)
-A human-readable version of all the information:
-```
+This detailed pipeline showcases a modern approach to content creation, where multiple specialized AI agents collaborate, managed by a central orchestrator and stateful database, to automate the production of complex creative work. 
