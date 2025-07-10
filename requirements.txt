@@ -23,4 +23,5 @@ jinja2
 beautifulsoup4
 scipy
 # Add parallax-maker from GitHub
-parallax-maker @ git+https://github.com/provos/parallax-maker.git 
+parallax-maker @ git+https://github.com/provos/parallax-maker.git
+deepgram-sdk 

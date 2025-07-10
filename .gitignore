@@ -154,3 +154,10 @@ db/*.db
 # Keep specific directories but not their contents
 !output/.gitkeep
 !temp/.gitkeep
+
+# local env file
+.env
+.env.*
+
+# audio test files
+audio_tests/
