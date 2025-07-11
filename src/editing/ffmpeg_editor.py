@@ -312,106 +312,82 @@ def compose_video(video_assets: List[str], audio_clips: List[str], output_path: 
         traceback.print_exc()
         return None
 
-def create_video_from_image(image_path: str, audio_path: str, output_path: str):
+def create_video_from_image(image_path: str, audio_path: str, output_path: str, motion_type: str = 'zoom_in'):
     """
-    Creates a video clip from a single image and an audio file with a slow, smooth zoom-in effect.
-    The video fills the screen without black bars.
-    The video duration will match the audio duration.
+    Creates a video from a single image and an audio file with a dynamic motion effect.
+    Motion can be 'zoom_in', 'pan_left', or 'pan_right'.
+    """
+    if not os.path.exists(image_path) or not os.path.exists(audio_path):
+        print(f"Error: Image or audio path does not exist. Image: {image_path}, Audio: {audio_path}")
+        return
 
-    Args:
-        image_path (str): Path to the input image.
-        audio_path (str): Path to the input audio.
-        output_path (str): Path to the output video file.
-    """
-    print(f"Creating video from image: {image_path} and audio: {audio_path}")
-    
     try:
-        # Get audio duration to determine zoom duration
-        audio_info = ffmpeg.probe(audio_path)
-        audio_duration = float(audio_info['format']['duration'])
-        
-        # Get video resolution and FPS from config
-        target_width, target_height = get_video_resolution(VIDEO_RESOLUTION)
-        fps = VIDEO_FPS
-        
-        # Define zoom parameters for a smooth zoom-in from 100% to 115%
-        zoom_start = 1.0
-        zoom_end = 1.15
-        
-        # Calculate total frames for the zoom duration
-        total_frames = int(audio_duration * fps)
+        probe = ffmpeg.probe(audio_path)
+        duration = float(probe['format']['duration'])
+    except ffmpeg.Error as e:
+        print(f"Error probing audio file {audio_path}: {e.stderr.decode('utf8')}")
+        return
+    except (KeyError, IndexError):
+        print(f"Error: Could not extract duration from {audio_path}")
+        return
 
-        # Build a robust FFmpeg command for a smooth Ken Burns effect.
-        # 1. Scale and crop the image to fill the screen ('increase' ensures coverage).
-        # 2. Apply a smooth zoom using an expression-based zoompan filter.
-        #    The zoom expression calculates the exact zoom level for each frame for smoothness.
-        filter_complex = (
-            f"[0:v]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
-            f"crop={target_width}:{target_height},"
-            f"setsar=1[prezoom];"
-            f"[prezoom]zoompan="
-            f"z='if(lte(on,1),{zoom_start},pzoom+({zoom_end}-{zoom_start})/{total_frames})':"
-            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"d={total_frames}:s={target_width}x{target_height}[v]"
+    target_width, target_height = get_video_resolution(VIDEO_RESOLUTION)
+    video_fps_int = int(VIDEO_FPS)
+    duration_in_frames = int(duration * video_fps_int)
+    
+    # Ensure duration_in_frames is at least 2 to avoid division by zero in expressions
+    if duration_in_frames < 2:
+        duration_in_frames = 2
+
+    stream = ffmpeg.input(image_path, loop=1, framerate=VIDEO_FPS)
+
+    if motion_type == 'zoom_in':
+        # Smooth zoom in with easing curve
+        stream = stream.filter(
+            'zoompan',
+            z='min(1+0.5*sin(2*PI*t/{:.2f})/2+0.5*t/{:.2f},1.3)'.format(duration, duration),
+            x='iw/2-(iw/zoom/2)',
+            y='ih/2-(ih/zoom/2)',
+            d=duration_in_frames,
+            s=f'{target_width}x{target_height}'
+        )
+    elif motion_type == 'pan_left':
+        # Smooth pan left with easing
+        stream = stream.filter(
+            'zoompan',
+            z='1.2',
+            x='(iw-ow)*(1-pow(t/{:.2f},0.7))'.format(duration),
+            y='ih/2-(ih/zoom/2)',
+            d=duration_in_frames,
+            s=f'{target_width}x{target_height}'
+        )
+    elif motion_type == 'pan_right':
+        # Smooth pan right with easing
+        stream = stream.filter(
+            'zoompan',
+            z='1.2',
+            x='(iw-ow)*pow(t/{:.2f},0.7)'.format(duration),
+            y='ih/2-(ih/zoom/2)',
+            d=duration_in_frames,
+            s=f'{target_width}x{target_height}'
         )
 
-        command = [
-            'ffmpeg',
-            '-loop', '1',
-            '-i', image_path,
-            '-i', audio_path,
-            '-filter_complex', filter_complex,
-            '-map', '[v]',
-            '-map', '1:a',
-            '-c:v', 'libx264',
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-pix_fmt', 'yuv420p',
-            '-t', str(audio_duration), # Use -t to ensure exact duration
-            '-y',
-            output_path
-        ]
-        
-        subprocess.run(command, check=True, capture_output=True, text=True)
-        print(f"Successfully created video with smooth zoom effect: {output_path}")
-
+    audio_stream = ffmpeg.input(audio_path)
+    
+    try:
+        (
+            ffmpeg
+            .concat(stream.filter('setdar', dar='16/9'), audio_stream, v=1, a=1)
+            .output(output_path, acodec='aac', vcodec='libx264', video_bitrate='2000k', r=VIDEO_FPS, t=duration)
+            .run(overwrite_output=True, quiet=True)
+        )
+        print(f"Successfully created video with {motion_type} effect: {output_path}")
+    except ffmpeg.Error as e:
+        print(f"Error creating video from image '{output_path}': {e.stderr.decode('utf8')}")
+        raise
     except Exception as e:
-        # If zoompan fails for any reason, fall back to a static image that fills the screen.
-        error_msg = str(e)
-        if isinstance(e, subprocess.CalledProcessError):
-            error_msg = e.stderr if e.stderr else str(e)
-        
-        print(f"An error occurred during smooth zoom effect: {error_msg}")
-        print("Falling back to static image (no zoom)...")
-
-        try:
-            target_width, target_height = get_video_resolution(VIDEO_RESOLUTION)
-            command_fallback = [
-                'ffmpeg',
-                '-loop', '1',
-                '-i', image_path,
-                '-i', audio_path,
-                '-filter_complex',
-                f"[0:v]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height}[v]",
-                '-map', '[v]',
-                '-map', '1:a',
-                '-c:v', 'libx264',
-                '-tune', 'stillimage',
-                '-c:a', 'aac',
-                '-b:a', '192k',
-                '-pix_fmt', 'yuv420p',
-                '-shortest',
-                '-y',
-                output_path
-            ]
-            subprocess.run(command_fallback, check=True, capture_output=True, text=True)
-            print(f"Successfully created video with fixed scale (no zoom): {output_path}")
-        except Exception as fallback_e:
-            fallback_error_msg = str(fallback_e)
-            if isinstance(fallback_e, subprocess.CalledProcessError):
-                fallback_error_msg = fallback_e.stderr if fallback_e.stderr else str(fallback_e)
-            print(f"Fallback method also failed: {fallback_error_msg}")
-            raise
+        print(f"An unexpected error occurred while creating {output_path}: {e}")
+        raise
 
 def main():
     """Demonstrates composing a video from dummy asset files."""

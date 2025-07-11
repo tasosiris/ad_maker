@@ -3,92 +3,121 @@ import requests
 from dotenv import load_dotenv
 import time
 import logging
+from openai import OpenAI, APIError, APIStatusError
 
-# Load environment variables from .env file
 load_dotenv()
 
-API_URL = "https://api.aimlapi.com/v1/images/generations/"
-API_KEY = os.getenv("AIML_API_KEY")
+AIMLAPI_BASE_URL = "https://api.aimlapi.com/v1"
+API_KEY = os.getenv("AIMLAPI_KEY")
 
-def generate_image(prompt: str, model: str = "flux/schnell", retries: int = 3):
+# Instantiate client once
+if API_KEY:
+    client = OpenAI(
+        base_url=AIMLAPI_BASE_URL,
+        api_key=API_KEY,
+    )
+else:
+    client = None
+    logging.error("Error: AIMLAPI_KEY not found in environment variables.")
+
+def generate_image(job_context: dict, prompt: str, image_name: str, model: str = "flux/schnell", retries: int = 3):
     """
-    Generates an image using the AIML API and returns the path to the saved image.
-
-    Args:
-        prompt (str): The text prompt for image generation.
-        model (str): The model to use for generation.
-        retries (int): The number of times to retry the request.
-
-    Returns:
-        str: The file path of the generated image, or None if generation failed.
+    Generates an image, tracks cost, and saves it to the job's output directory.
+    Uses the OpenAI SDK-compatible AIMLAPI.
     """
-    if not API_KEY:
-        logging.error("Error: AIML_API_KEY not found in environment variables.")
+    if not client:
         return None
 
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
+    output_manager = job_context['output_manager']
+    cost_tracker = job_context['cost_tracker']
 
-    payload = {
-        "prompt": prompt,
-        "model": model,
-    }
-
-    logging.info(f"Generating image with prompt: '{prompt}' using model: {model}...")
+    logging.info(f"Generating image '{image_name}' with prompt: '{prompt}' using model '{model}'...")
 
     for attempt in range(retries):
         try:
-            response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
-            response.raise_for_status()  # Raise an exception for bad status codes
+            response = client.images.generate(
+                model=model,
+                prompt=prompt,
+                n=1,
+            )
 
-            data = response.json()
-            
-            if "images" in data and len(data["images"]) > 0 and "url" in data["images"][0]:
-                image_url = data["images"][0]["url"]
+            image_url = None
+            # Standard OpenAI response structure
+            if response.data and len(response.data) > 0 and response.data[0].url:
+                image_url = response.data[0].url
+            # AIMLAPI-specific response structure
+            elif hasattr(response, 'images') and isinstance(getattr(response, 'images', None), list) and len(response.images) > 0:
+                image_info = response.images[0]
+                if isinstance(image_info, dict) and 'url' in image_info:
+                    image_url = image_info['url']
+
+            if image_url:
                 logging.info(f"Image generated successfully! URL: {image_url}")
-                
+
                 # Download the image
                 image_response = requests.get(image_url, stream=True)
                 image_response.raise_for_status()
 
-                # Create a filename from the prompt
-                safe_prompt = "".join(c for c in prompt if c.isalnum() or c in " ._").rstrip()
-                filename = f"{safe_prompt[:50]}_{int(time.time())}.png"
-                output_path = os.path.join("output", filename)
-                
-                os.makedirs("output", exist_ok=True)
+                output_path = output_manager.get_images_directory() / f"{image_name}.png"
+
                 with open(output_path, 'wb') as f:
                     for chunk in image_response.iter_content(1024):
                         f.write(chunk)
-                
+
                 logging.info(f"Image saved to {output_path}")
-                return output_path
+
+                cost_info = cost_tracker.add_cost(
+                    "aimlapi",
+                    model=model,
+                    images=1
+                )
+                output_manager.save_prompt(
+                    agent_name=f"image_generator_{image_name}",
+                    prompt_data={"prompt": prompt, "model": model},
+                    cost_info=cost_info
+                )
+
+                return str(output_path)
             else:
-                logging.error(f"Could not find image URL in the API response: {data}")
+                logging.error(f"Could not find image URL in the API response: {response}")
                 return None
 
-        except requests.exceptions.RequestException as e:
-            logging.warning(f"Attempt {attempt + 1}/{retries} failed with error: {e}")
+        except (APIError, APIStatusError) as e:
+            logging.warning(f"Attempt {attempt + 1}/{retries} failed: {e}")
             if attempt < retries - 1:
-                logging.info("Waiting 1 second before retrying...")
-                time.sleep(1)
+                time.sleep(1) # Simple backoff
             else:
                 logging.error("All retry attempts failed.")
                 return None
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Failed to download image from URL {image_url}: {e}")
+            return None
 
     return None
 
 if __name__ == "__main__":
-    # This part is for testing the function directly
-    import argparse
-    parser = argparse.ArgumentParser(description="Generate an image using the AIML API.")
-    parser.add_argument("prompt", type=str, help="The prompt to generate the image from.")
-    args = parser.parse_args()
+    from src.utils.output_manager import OutputManager
+    from src.utils.cost_calculator import CostTracker
 
-    image_path = generate_image(args.prompt)
+    logging.basicConfig(level=logging.INFO)
+
+    test_prompt = "A majestic lion in the savanna at sunset, photorealistic."
+    idea = "test_image_gen"
+    image_name = "lion_test"
+
+    output_manager = OutputManager(idea=idea)
+    cost_tracker = CostTracker(output_dir=output_manager.get_job_directory())
+    job_context = {
+        "output_manager": output_manager,
+        "cost_tracker": cost_tracker,
+    }
+
+    image_path = generate_image(job_context, test_prompt, image_name)
+    
     if image_path:
         print(f"Image generation successful. Path: {image_path}")
     else:
-        print("Image generation failed.") 
+        print("Image generation failed.")
+    
+    cost_tracker.save_costs()
+    print(f"\nCosts tracked and saved in: {output_manager.get_job_directory()}") 

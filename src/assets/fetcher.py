@@ -67,11 +67,12 @@ def _download_file(url: str, local_filename: Path) -> str:
         local_filename.unlink()
         return None
 
-def fetch_clips(query: str, num_clips: int, min_duration: float = 3.0) -> List[str]:
+def fetch_clips(job_context: dict, query: str, num_clips: int, min_duration: float = 3.0) -> List[str]:
     """
     Fetches video clips from Pexels based on a query and caches them locally.
     Returns a list of local file paths.
     """
+    cost_tracker = job_context['cost_tracker']
     print(f"Searching for {num_clips} clips with query: '{query}'")
     asset_paths = []
     
@@ -85,6 +86,8 @@ def fetch_clips(query: str, num_clips: int, min_duration: float = 3.0) -> List[s
         response = requests.get(PEXELS_API_URL, headers=PEXELS_HEADERS, params=params)
         response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
         
+        cost_tracker.add_cost("pexels", "api_call", requests=1)
+
         data = response.json()
         videos = data.get('videos', [])
 
@@ -138,11 +141,21 @@ def fetch_clips(query: str, num_clips: int, min_duration: float = 3.0) -> List[s
 
 def main():
     """Demonstrates fetching video clips for a given query."""
+    from src.utils.output_manager import OutputManager
+    from src.utils.cost_calculator import CostTracker
+
     query = "technology innovation"
     num_clips_to_fetch = 5
     
+    output_manager = OutputManager(idea="fetcher_test")
+    cost_tracker = CostTracker(output_dir=output_manager.get_job_directory())
+    job_context = {
+        "output_manager": output_manager,
+        "cost_tracker": cost_tracker,
+    }
+
     print(f"--- Fetching {num_clips_to_fetch} clips for query: '{query}' ---")
-    video_paths = fetch_clips(query, num_clips=num_clips_to_fetch, min_duration=5.0)
+    video_paths = fetch_clips(job_context, query, num_clips=num_clips_to_fetch, min_duration=5.0)
     
     if video_paths:
         print(f"\nSuccessfully fetched {len(video_paths)} video clips:")
@@ -150,6 +163,8 @@ def main():
             print(f"- {path}")
     else:
         print("\nCould not fetch any video clips for the query.")
+
+    cost_tracker.save_costs()
 
 if __name__ == "__main__":
     main() 

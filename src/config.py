@@ -25,8 +25,7 @@ except yaml.YAMLError as e:
 # It's recommended to load sensitive keys from environment variables
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY") # Placeholder for future use
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
@@ -57,9 +56,6 @@ TTS_CACHE_DIR = Path(PROJECT_ROOT) / CACHE_CONFIG.get('tts_dir', 'temp/tts')
 
 # --- TTS Defaults ---
 TTS_DEFAULTS = _config.get('tts_defaults', {})
-# Ensure ELEVENLABS_VOICE_ID is prioritized if available
-if not ELEVENLABS_VOICE_ID:
-    ELEVENLABS_VOICE_ID = TTS_DEFAULTS.get('voice_id', 'Adam')
 
 # --- Ensure required directories exist ---
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -68,7 +64,7 @@ ASSET_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Validation ---
-if not all([OPENAI_API_KEY, PEXELS_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID]):
-    print("FATAL: One or more required API keys (OPENAI_API_KEY, PEXELS_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID) are missing.")
+if not all([OPENAI_API_KEY, PEXELS_API_KEY, DEEPGRAM_API_KEY]):
+    print("FATAL: One or more required API keys (OPENAI_API_KEY, PEXELS_API_KEY, DEEPGRAM_API_KEY) are missing.")
     print("Please check your .env file.")
     exit(1) 
